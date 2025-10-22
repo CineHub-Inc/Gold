@@ -25,6 +25,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let isWatchingMode = false;
     let watchlistItems = [];
     let watchingItems = [];
+    // NEW: Firestore-backed progress tracking
+    let watchedProgress = {};
     let selectedSort = 'date_added_desc';
     let selectedNetwork = '';
     let lastPlayedItem = null;
@@ -35,7 +37,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let heroTimeRemaining = 8000;
     let isHeroPausedByModal = false;
     const heroCarouselController = { resume: null };
-    // NEW/CHANGED LOGIC: This will hold our Firestore listener so we can detach it on logout
     let sessionListenerUnsubscribe = null;
     
     // Sort state
@@ -117,21 +118,57 @@ document.addEventListener('DOMContentLoaded', () => {
     const resetAndFetch = () => { destroySortable(); currentPage = 1; totalPages = 1; fetchAndDisplayMedia(1, false); };
     const updateSortButtonsUI = () => { const buttons = [{ el: sortDefaultBtn, key: 'default' }, { el: sortYearBtn, key: 'year' }, { el: sortRateBtn, key: 'rate' }, { el: sortPopularityBtn, key: 'popularity' }]; buttons.forEach(btn => { btn.el.classList.remove('active'); const oldIcon = btn.el.querySelector('.sort-icon'); if (oldIcon) oldIcon.remove(); if (btn.key === activeSort) { btn.el.classList.add('active'); if (activeSort !== 'default') { const icon = document.createElement('i'); icon.className = `fas fa-arrow-${sortOrder === 'desc' ? 'down' : 'up'} sort-icon`; btn.el.appendChild(icon); } } }); };
     const updateFiltersUI = () => { const isDiscover = !isActorSearchMode && !isWatchlistMode && !isWatchingMode; const canShowHero = window.innerWidth >= 1024; const showHero = isDiscover && canShowHero; const mediaTypeToggleContainer = movieTypeBtn.parentElement; const mainElement = document.querySelector('main.container'); if(heroBanner) { heroBanner.classList.toggle('hidden', !showHero); header.classList.toggle('header-with-hero', showHero); } if (mainElement) mainElement.style.paddingTop = showHero ? '2rem' : '8rem'; mediaTypeToggleContainer.classList.toggle('hidden', isWatchingMode); const allFilters = [networkFilterWrapper, genreFilterWrapper, yearFilterWrapper, countryFilterWrapper, languageFilterWrapper, resetBtn]; allFilters.forEach(el => el.classList.toggle('hidden', isActorSearchMode)); const showNetworkFilter = (isDiscover || isWatchlistMode) && mediaType === 'tv'; networkFilterWrapper.classList.toggle('hidden', !showNetworkFilter); sortControls.classList.toggle('hidden', !isDiscover); if (isActorSearchMode) { searchInput.placeholder = 'Search for Actors...'; } else if (mediaType === 'tv') { searchInput.placeholder = 'Search for TV Series...'; } else { searchInput.placeholder = 'Search for Films...'; } };
-    const calculateNextEpisode = (item, watchedProgress) => { const itemProgress = watchedProgress[item.id]; let nextUp = { season: 1, episode: 1 }; if (!itemProgress || !item.seasons) return nextUp; const validSeasons = item.seasons.filter(s => s.season_number > 0 && s.episode_count > 0); if (validSeasons.length === 0) return nextUp; const lastWatchedSeason = validSeasons.find(s => s.season_number === itemProgress.season); if (lastWatchedSeason) { if (itemProgress.episode < lastWatchedSeason.episode_count) { nextUp = { season: itemProgress.season, episode: itemProgress.episode + 1 }; } else { const nextSeason = validSeasons.find(s => s.season_number === itemProgress.season + 1); if (nextSeason) { nextUp = { season: nextSeason.season_number, episode: 1 }; } else { nextUp = { season: itemProgress.season, episode: itemProgress.episode }; } } } return nextUp; };
+    
+    // CHANGED: Now uses the global `watchedProgress` object
+    const calculateNextEpisode = (item, progress) => {
+        const itemProgress = progress[item.id];
+        let nextUp = { season: 1, episode: 1 };
+        if (!itemProgress || !item.seasons) return nextUp;
+        const validSeasons = item.seasons.filter(s => s.season_number > 0 && s.episode_count > 0);
+        if (validSeasons.length === 0) return nextUp;
+        const lastWatchedSeason = validSeasons.find(s => s.season_number === itemProgress.season);
+        if (lastWatchedSeason) {
+            if (itemProgress.episode < lastWatchedSeason.episode_count) {
+                nextUp = { season: itemProgress.season, episode: itemProgress.episode + 1 };
+            } else {
+                const nextSeason = validSeasons.find(s => s.season_number === itemProgress.season + 1);
+                if (nextSeason) {
+                    nextUp = { season: nextSeason.season_number, episode: 1 };
+                } else {
+                    nextUp = { season: itemProgress.season, episode: itemProgress.episode }; // Stay on last episode
+                }
+            }
+        }
+        return nextUp;
+    };
+
     const formatRuntime = (minutes) => { if (!minutes || minutes === 0) return 'N/A'; const hours = Math.floor(minutes / 60); const mins = minutes % 60; return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`; };
     const generateEpisodeOptions = (episodeCount) => { if (!episodeCount || episodeCount === 0) return '<option>N/A</option>'; return Array.from({ length: episodeCount }, (_, i) => `<option value="${i + 1}">Ep ${i + 1}</option>`).join(''); };
-    const openPlayer = (id, type, controlsContainer, mediaDetails) => {
+
+    // CHANGED: Now saves progress to Firestore
+    const openPlayer = async (id, type, controlsContainer, mediaDetails) => {
+        const user = auth.currentUser;
         const isTV = type === 'tv';
         let src;
+    
         if (isTV) {
             const seasonSelect = controlsContainer.querySelector('.player-season-select');
             const episodeSelect = controlsContainer.querySelector('.player-episode-select');
             const season = seasonSelect?.value || '1';
             const episode = episodeSelect?.value || '1';
             src = `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`;
-            const watchedProgress = JSON.parse(localStorage.getItem('watchedProgress')) || {};
-            watchedProgress[id] = { season: parseInt(season, 10), episode: parseInt(episode, 10) };
-            localStorage.setItem('watchedProgress', JSON.stringify(watchedProgress));
+    
+            if (user) {
+                const progressRef = db.collection('users').doc(user.uid).collection('progress').doc(String(id));
+                const newProgress = { season: parseInt(season, 10), episode: parseInt(episode, 10) };
+                try {
+                    await progressRef.set(newProgress);
+                    watchedProgress[id] = newProgress; // Update local state
+                } catch (error) {
+                    console.error("Failed to save progress:", error);
+                }
+            }
+    
             lastPlayedItem = { id, type, season: parseInt(season, 10), episode: parseInt(episode, 10), title: mediaDetails.title || mediaDetails.name };
             addToWatchingList(id, type);
         } else {
@@ -140,15 +177,141 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         window.open(src, '_blank');
     };
+
     const createPersonCardElement = (person) => { if (!person.profile_path) return null; const title = person.name; const posterUrl = `https://image.tmdb.org/t/p/w500${person.profile_path}`; const escapedName = title.replace(/'/g, "\\'"); const wrapper = document.createElement('div'); wrapper.className = 'media-card-wrapper'; const card = document.createElement('div'); card.className = 'media-card'; card.dataset.id = person.id; card.dataset.type = 'person'; card.dataset.detailsLoaded = 'false'; card.onclick = () => showFilmography(person.id, escapedName); card.innerHTML = `<img src="${posterUrl}" alt="Photo of ${title}" class="media-card-poster" loading="lazy"/><div class="media-card-overlay"><div class="details-pane"><div class="details-spinner"><div class="spinner-small"></div></div><div class="details-content hidden"><div class="details-text-container"><div class="person-name-text"><strong>${title}</strong></div><div class="nationality-text-container hidden"><strong><i class="fa-solid fa-location-dot" aria-hidden="true"></i></strong>⠀<span class="nationality-text"></span></div><div class="age-text-container hidden"><strong><i class="fa-solid fa-cake-candles" aria-hidden="true"></i></strong>⠀<span class="age-text"></span></div></div></div></div></div>`; wrapper.appendChild(card); return wrapper; };
-    const createMediaCardElement = (media) => { const type = media.media_type || (media.first_air_date ? 'tv' : 'movie'); const title = media.title || media.name || 'Unknown Title'; const posterUrl = media.poster_path ? `https://image.tmdb.org/t/p/w500${media.poster_path}` : UNAVAILABLE_IMAGE_URL; const escapedTitle = title.replace(/'/g, "\\'"); const wrapper = document.createElement('div'); wrapper.className = 'media-card-wrapper'; const card = document.createElement('div'); card.className = 'media-card'; card.dataset.id = media.id; card.dataset.type = type; const releaseYear = (media.release_date || media.first_air_date || 'N/A').substring(0, 4); const voteAverage = media.vote_average ? media.vote_average.toFixed(1) : '0.0'; card.innerHTML = `<img src="${posterUrl}" alt="Poster for ${title}" class="media-card-poster" loading="lazy"/><div class="media-card-overlay"><div class="media-card-meta"><span>${releaseYear}</span><div class="media-card-rating"><i class="fas fa-star"></i><span>${voteAverage}</span></div></div><div class="details-pane"><div class="details-spinner"><div class="spinner-small"></div></div><div class="details-content hidden"><div class="details-text-container"><div class="country-text-container hidden"><i class="fa-solid fa-earth-americas" aria-hidden="true"></i><span class="country-text"></span></div><div class="language-text-container hidden"><i class="fa-regular fa-message" aria-hidden="true"></i><span class="language-text"></span></div><div class="genres-text-container hidden"><i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span class="genres-text"></span></div><div class="series-text-container hidden"><i class="fa-regular fa-rectangle-list" aria-hidden="true"></i><span class="series-text"></span></div><div class="network-text-container hidden"><i class="fa-solid fa-tv" aria-hidden="true"></i><span class="network-text"></span></div><div class="runtime-text-container hidden"><i class="fa-regular fa-clock" aria-hidden="true"></i><span class="runtime-text"></span></div></div><div class="details-buttons"><button class="details-btn watchlist-btn" title="Add to Watchlist"><i class="fas fa-bookmark"></i></button><button class="details-btn trailer-btn" title="Watch Trailer"><i class="fas fa-play"></i></button><button class="details-btn synopsis-btn" title="Read Synopsis"><i class="fas fa-info-circle"></i></button><button class="details-btn cast-btn" title="View Cast"><i class="fa-solid fa-user-group"></i></button></div></div></div></div>`; wrapper.appendChild(card); if (media.genres) { const spinner = card.querySelector('.details-spinner'); const content = card.querySelector('.details-content'); if (type === 'tv') { const network = media.networks?.[0]?.name; if(network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = media.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = media.runtime || (media.episode_run_time ? media.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = media.production_countries?.[0]?.name; if(country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = media.spoken_languages?.[0]?.english_name; if(language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = media.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); } spinner.classList.add('hidden'); content.classList.remove('hidden'); card.dataset.detailsLoaded = 'true'; } else { card.dataset.detailsLoaded = 'false'; } if (isWatchlistMode || isWatchingMode) { const playerControls = document.createElement('div'); playerControls.className = 'watchlist-player-controls'; if (type === 'tv' && media.seasons) { const validSeasons = media.seasons.filter(s => s.season_number > 0 && s.episode_count > 0); if (validSeasons.length > 0) { const watchedProgress = JSON.parse(localStorage.getItem('watchedProgress')) || {}; const nextUp = calculateNextEpisode(media, watchedProgress); const initialSeasonData = validSeasons.find(s => s.season_number === nextUp.season) || validSeasons[0]; playerControls.innerHTML = `<select class="player-season-select">${validSeasons.map(s => `<option value="${s.season_number}" ${s.season_number === nextUp.season ? 'selected' : ''}>S ${s.season_number}</option>`).join('')}</select><select class="player-episode-select">${generateEpisodeOptions(initialSeasonData.episode_count)}</select><button class="details-btn player-play-btn" title="Play Episode"><i class="fas fa-play"></i></button>`; const seasonSelect = playerControls.querySelector('.player-season-select'); const episodeSelect = playerControls.querySelector('.player-episode-select'); if (episodeSelect) episodeSelect.value = nextUp.episode; seasonSelect.addEventListener('change', () => { const selectedSeasonData = validSeasons.find(s => s.season_number == seasonSelect.value); if (selectedSeasonData) { episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count); } }); } } else if (type === 'movie') { playerControls.innerHTML = `<button class="details-btn player-play-btn movie" title="Play Movie"><i class="fas fa-play"></i></button>`; } if (playerControls.hasChildNodes()) { const playBtn = playerControls.querySelector('.player-play-btn'); if (playBtn) { playBtn.addEventListener('click', (e) => { e.stopPropagation(); openPlayer(media.id, type, playerControls, media); }); } wrapper.appendChild(playerControls); } } card.querySelector('.trailer-btn').onclick = (e) => { e.stopPropagation(); showTrailer(media.id, type); }; card.querySelector('.synopsis-btn').onclick = (e) => { e.stopPropagation(); showSynopsis(media.id, type, escapedTitle); }; card.querySelector('.cast-btn').onclick = (e) => { e.stopPropagation(); showCast(media.id, type); }; card.querySelector('.watchlist-btn').onclick = (e) => { e.stopPropagation(); toggleWatchlistAction(media.id, type, e.currentTarget); }; return wrapper; };
+    
+    // CHANGED: Moved status tag container inside the overlay and added "On Air" logic.
+    const createMediaCardElement = (media) => {
+        const type = media.media_type || (media.first_air_date ? 'tv' : 'movie');
+        const title = media.title || media.name || 'Unknown Title';
+        const posterUrl = media.poster_path ? `https://image.tmdb.org/t/p/w500${media.poster_path}` : UNAVAILABLE_IMAGE_URL;
+        const escapedTitle = title.replace(/'/g, "\\'");
+        const wrapper = document.createElement('div');
+        wrapper.className = 'media-card-wrapper';
+        const card = document.createElement('div');
+        card.className = 'media-card';
+        card.dataset.id = media.id;
+        card.dataset.type = type;
+        const releaseYear = (media.release_date || media.first_air_date || 'N/A').substring(0, 4);
+        const voteAverage = media.vote_average ? media.vote_average.toFixed(1) : '0.0';
+        
+        card.innerHTML = `
+            <img src="${posterUrl}" alt="Poster for ${title}" class="media-card-poster" loading="lazy"/>
+            <div class="media-card-overlay">
+                <div class="status-tag-container"></div>
+                <div class="media-card-meta">
+                    <span>${releaseYear}</span>
+                    <div class="media-card-rating">
+                        <i class="fas fa-star"></i>
+                        <span>${voteAverage}</span>
+                    </div>
+                </div>
+                <div class="details-pane">
+                    <div class="details-spinner"><div class="spinner-small"></div></div>
+                    <div class="details-content hidden">
+                        <div class="details-text-container">
+                            <div class="country-text-container hidden"><i class="fa-solid fa-earth-americas" aria-hidden="true"></i><span class="country-text"></span></div>
+                            <div class="language-text-container hidden"><i class="fa-regular fa-message" aria-hidden="true"></i><span class="language-text"></span></div>
+                            <div class="genres-text-container hidden"><i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span class="genres-text"></span></div>
+                            <div class="series-text-container hidden"><i class="fa-regular fa-rectangle-list" aria-hidden="true"></i><span class="series-text"></span></div>
+                            <div class="network-text-container hidden"><i class="fa-solid fa-tv" aria-hidden="true"></i><span class="network-text"></span></div>
+                            <div class="runtime-text-container hidden"><i class="fa-regular fa-clock" aria-hidden="true"></i><span class="runtime-text"></span></div>
+                        </div>
+                        <div class="details-buttons">
+                            <button class="details-btn watchlist-btn" title="Add to Watchlist"><i class="fas fa-bookmark"></i></button>
+                            <button class="details-btn trailer-btn" title="Watch Trailer"><i class="fas fa-play"></i></button>
+                            <button class="details-btn synopsis-btn" title="Read Synopsis"><i class="fas fa-info-circle"></i></button>
+                            <button class="details-btn cast-btn" title="View Cast"><i class="fa-solid fa-user-group"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+    
+        wrapper.appendChild(card);
+    
+        // Logic to populate details if already available in the media object
+        if (media.genres) {
+            const spinner = card.querySelector('.details-spinner');
+            const content = card.querySelector('.details-content');
+    
+            if (type === 'tv' && media.status) {
+                const statusTagContainer = card.querySelector('.status-tag-container');
+                const status = media.status.replace(' Series', '');
+                let displayStatus = status;
+                let statusClass = status.toLowerCase().replace(' ', '-');
+
+                if (media.status === 'Returning Series' && media.last_episode_to_air?.air_date) {
+                    const lastAirDate = new Date(media.last_episode_to_air.air_date);
+                    const today = new Date();
+                    const timeDifference = today.getTime() - lastAirDate.getTime();
+                    const daysDifference = timeDifference / (1000 * 3600 * 24);
+
+                    if (daysDifference >= 0 && daysDifference < 8) {
+                        displayStatus = 'On Air';
+                        statusClass = 'on-air';
+                    }
+                }
+                statusTagContainer.innerHTML = `<span class="status-tag status-${statusClass}">${displayStatus}</span>`;
+            }
+            if (type === 'tv') { const network = media.networks?.[0]?.name; if(network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = media.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = media.runtime || (media.episode_run_time ? media.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = media.production_countries?.[0]?.name; if(country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = media.spoken_languages?.[0]?.english_name; if(language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = media.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); } spinner.classList.add('hidden'); content.classList.remove('hidden'); card.dataset.detailsLoaded = 'true'; } else { card.dataset.detailsLoaded = 'false'; } if (isWatchlistMode || isWatchingMode) { const playerControls = document.createElement('div'); playerControls.className = 'watchlist-player-controls'; if (type === 'tv' && media.seasons) { const validSeasons = media.seasons.filter(s => s.season_number > 0 && s.episode_count > 0); if (validSeasons.length > 0) {
+            const nextUp = calculateNextEpisode(media, watchedProgress);
+            const initialSeasonData = validSeasons.find(s => s.season_number === nextUp.season) || validSeasons[0]; playerControls.innerHTML = `<select class="player-season-select">${validSeasons.map(s => `<option value="${s.season_number}" ${s.season_number === nextUp.season ? 'selected' : ''}>S ${s.season_number}</option>`).join('')}</select><select class="player-episode-select">${generateEpisodeOptions(initialSeasonData.episode_count)}</select><button class="details-btn player-play-btn" title="Play Episode"><i class="fas fa-play"></i></button>`; const seasonSelect = playerControls.querySelector('.player-season-select'); const episodeSelect = playerControls.querySelector('.player-episode-select'); if (episodeSelect) episodeSelect.value = nextUp.episode; seasonSelect.addEventListener('change', () => { const selectedSeasonData = validSeasons.find(s => s.season_number == seasonSelect.value); if (selectedSeasonData) { episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count); } }); } } else if (type === 'movie') { playerControls.innerHTML = `<button class="details-btn player-play-btn movie" title="Play Movie"><i class="fas fa-play"></i></button>`; } if (playerControls.hasChildNodes()) { const playBtn = playerControls.querySelector('.player-play-btn'); if (playBtn) { playBtn.addEventListener('click', (e) => { e.stopPropagation(); openPlayer(media.id, type, playerControls, media); }); } wrapper.appendChild(playerControls); } } card.querySelector('.trailer-btn').onclick = (e) => { e.stopPropagation(); showTrailer(media.id, type); }; card.querySelector('.synopsis-btn').onclick = (e) => { e.stopPropagation(); showSynopsis(media.id, type, escapedTitle); }; card.querySelector('.cast-btn').onclick = (e) => { e.stopPropagation(); showCast(media.id, type); }; card.querySelector('.watchlist-btn').onclick = (e) => { e.stopPropagation(); toggleWatchlistAction(media.id, type, e.currentTarget); }; return wrapper; };
     const showToast = (message) => { toast.innerHTML = `<span>${message}</span>`; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 3000); };
     const showNextEpisodeToast = (message, buttonText, onAction) => { toast.classList.remove('show'); toast.innerHTML = `<span>${message}</span><div class="toast-buttons-container"><button class="toast-action-btn">${buttonText}</button><button class="toast-close-btn">&times;</button></div>`; const actionBtn = toast.querySelector('.toast-action-btn'); const closeBtn = toast.querySelector('.toast-close-btn'); const closeToast = () => toast.classList.remove('show'); actionBtn.onclick = () => { onAction(); closeToast(); }; closeBtn.onclick = closeToast; toast.classList.add('show'); };
     const _setModalContent = (content, { isTrailer = false, isNavigable = false } = {}) => { const modalId = 'modal-backdrop'; const modal = document.createElement('div'); modal.id = modalId; modal.className = isTrailer ? 'modal-backdrop-trailer' : 'modal-backdrop'; const contentWrapper = document.createElement('div'); contentWrapper.className = isTrailer ? 'modal-content-trailer' : 'modal-content'; const singleClickHandler = (e) => { if (e.target.id === modalId) { isNavigable ? goBackInModal() : closeModal(); } }; const dblClickHandler = (e) => { if (e.target.id === modalId) { closeModal(); } }; modal.onclick = singleClickHandler; modal.ondblclick = dblClickHandler; const closeBtn = document.createElement('button'); closeBtn.className = isTrailer ? 'modal-close-btn-trailer' : 'modal-close-btn'; closeBtn.innerHTML = '<i class="fas fa-times fa-lg"></i>'; closeBtn.setAttribute('aria-label', 'Close modal'); closeBtn.onclick = closeModal; if (typeof content === 'string') { contentWrapper.innerHTML += content; } else { contentWrapper.appendChild(content); } contentWrapper.prepend(closeBtn); modal.appendChild(contentWrapper); modalContainer.innerHTML = ''; modalContainer.appendChild(modal); const filmographyContent = contentWrapper.querySelector('[data-filmography-person-id]'); if (filmographyContent) { const personId = filmographyContent.dataset.filmographyPersonId; const scrollKey = `filmography-scroll-${personId}`; const savedScrollTop = sessionStorage.getItem(scrollKey); if (savedScrollTop) { setTimeout(() => { contentWrapper.scrollTop = parseInt(savedScrollTop, 10); }, 0); } contentWrapper.addEventListener('scroll', () => { sessionStorage.setItem(scrollKey, contentWrapper.scrollTop); }); } document.documentElement.classList.add('is-modal-open'); };
     window.closeModal = () => { modalContainer.innerHTML = ''; document.documentElement.classList.remove('is-modal-open'); modalHistory = []; if (isHeroPausedByModal) { if (heroCarouselController.resume) { heroCarouselController.resume(); } isHeroPausedByModal = false; } };
     const goBackInModal = () => { if (modalHistory.length <= 1) { closeModal(); return; } modalHistory.pop(); const prevState = modalHistory[modalHistory.length - 1]; _setModalContent(prevState.content, prevState.options); };
     const createSpinnerHTML = () => `<div class="loader-container"><div class="spinner"></div></div>`;
-    const handleCardHover = async (e) => { const card = e.target.closest('.media-card'); if (!card || card.dataset.detailsLoaded === 'true') return; const id = card.dataset.id; const type = card.dataset.type; card.dataset.detailsLoaded = 'true'; const spinner = card.querySelector('.details-spinner'); const content = card.querySelector('.details-content'); try { if (type === 'person') { const details = await fetchFromApi(`person/${id}?language=en-US`); const age = calculateAge(details.birthday); if (age && age !== 'N/A') { card.querySelector('.age-text').textContent = age; card.querySelector('.age-text-container').classList.remove('hidden'); } const nationality = details.place_of_birth ? details.place_of_birth.split(',').pop().trim() : null; if (nationality) { card.querySelector('.nationality-text').textContent = nationality; card.querySelector('.nationality-text-container').classList.remove('hidden'); } } else { const details = await fetchFromApi(`${type}/${id}?language=en-US`); if (type === 'tv') { const network = details.networks?.[0]?.name; if (network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = details.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = details.runtime || (details.episode_run_time ? details.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = details.production_countries?.[0]?.name; if (country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = details.spoken_languages?.[0]?.english_name; if (language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = details.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); } } spinner.classList.add('hidden'); content.classList.remove('hidden'); } catch (err) { console.error(`Error fetching details for ${type} on hover`, err); if (spinner) { spinner.innerHTML = `<p class="details-error-text">Could not load details.</p>`; } } };
+    
+    // CHANGED: Added "On Air" logic.
+    const handleCardHover = async (e) => {
+        const card = e.target.closest('.media-card');
+        if (!card || card.dataset.detailsLoaded === 'true') return;
+        const id = card.dataset.id;
+        const type = card.dataset.type;
+        card.dataset.detailsLoaded = 'true'; 
+        const spinner = card.querySelector('.details-spinner');
+        const content = card.querySelector('.details-content');
+    
+        try {
+            if (type === 'person') {
+                const details = await fetchFromApi(`person/${id}?language=en-US`);
+                const age = calculateAge(details.birthday);
+                if (age && age !== 'N/A') { card.querySelector('.age-text').textContent = age; card.querySelector('.age-text-container').classList.remove('hidden'); }
+                const nationality = details.place_of_birth ? details.place_of_birth.split(',').pop().trim() : null;
+                if (nationality) { card.querySelector('.nationality-text').textContent = nationality; card.querySelector('.nationality-text-container').classList.remove('hidden'); }
+            } else {
+                const details = await fetchFromApi(`${type}/${id}?language=en-US`);
+                if (type === 'tv' && details.status) {
+                    const statusTagContainer = card.querySelector('.status-tag-container');
+                    const status = details.status.replace(' Series', '');
+                    let displayStatus = status;
+                    let statusClass = status.toLowerCase().replace(' ', '-');
+
+                    if (details.status === 'Returning Series' && details.last_episode_to_air?.air_date) {
+                        const lastAirDate = new Date(details.last_episode_to_air.air_date);
+                        const today = new Date();
+                        const timeDifference = today.getTime() - lastAirDate.getTime();
+                        const daysDifference = timeDifference / (1000 * 3600 * 24);
+                        
+                        if (daysDifference >= 0 && daysDifference < 8) {
+                            displayStatus = 'On Air';
+                            statusClass = 'on-air';
+                        }
+                    }
+                    statusTagContainer.innerHTML = `<span class="status-tag status-${statusClass}">${displayStatus}</span>`;
+                }
+                if (type === 'tv') { const network = details.networks?.[0]?.name; if (network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = details.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = details.runtime || (details.episode_run_time ? details.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = details.production_countries?.[0]?.name; if (country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = details.spoken_languages?.[0]?.english_name; if (language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = details.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); }
+            }
+            spinner.classList.add('hidden');
+            content.classList.remove('hidden');
+        } catch (err) {
+            console.error(`Error fetching details for ${type} on hover`, err);
+            if (spinner) {
+                spinner.innerHTML = `<p class="details-error-text">Could not load details.</p>`;
+            }
+        }
+    };
     
     window.showTrailer = async (id, type) => {
         let content;
@@ -229,13 +392,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!user) {
             watchlistItems = [];
             watchingItems = [];
+            watchedProgress = {};
             updateAllCardWatchlistIcons();
             return;
         }
         try {
             const watchlistPromise = db.collection('users').doc(user.uid).collection('watchlist').get();
             const watchingPromise = db.collection('users').doc(user.uid).collection('watching').get();
-            const [watchlistSnapshot, watchingSnapshot] = await Promise.all([watchlistPromise, watchingPromise]);
+            // NEW: Fetch progress data
+            const progressPromise = db.collection('users').doc(user.uid).collection('progress').get();
+
+            const [watchlistSnapshot, watchingSnapshot, progressSnapshot] = await Promise.all([watchlistPromise, watchingPromise, progressPromise]);
             
             watchlistItems = watchlistSnapshot.docs.map(doc => doc.data());
             watchlistItems.sort((a, b) => {
@@ -250,6 +417,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             watchingItems = watchingSnapshot.docs.map(doc => doc.data());
+
+            // NEW: Populate local progress object
+            watchedProgress = {};
+            progressSnapshot.forEach(doc => {
+                watchedProgress[doc.id] = doc.data();
+            });
+
             updateAllCardWatchlistIcons();
             if(isWatchlistMode || isWatchingMode) {
                 displayUserLists();
@@ -299,6 +473,8 @@ document.addEventListener('DOMContentLoaded', () => {
             initSortable();
         }
     };
+    
+    // CHANGED: Now checks both `watchlistItems` and `watchingItems`
     const updateAllCardWatchlistIcons = () => {
         const cards = document.querySelectorAll('.watchlist-btn');
         cards.forEach(btn => {
@@ -307,56 +483,66 @@ document.addEventListener('DOMContentLoaded', () => {
                 const id = card.dataset.id;
                 if (!id) return;
                 const isInWatchlist = watchlistItems.some(item => item.id == id);
-                btn.classList.toggle('in-watchlist', isInWatchlist);
-                btn.title = isInWatchlist ? "Remove from Watchlist" : "Add to Watchlist";
+                const isInWatching = watchingItems.some(item => item.id == id);
+                const isActive = isInWatchlist || isInWatching; // Activate if in either list
+                btn.classList.toggle('in-watchlist', isActive);
+                btn.title = isActive ? "Remove from My Lists" : "Add to Watchlist";
             }
         });
     };
+
+    // CHANGED: Now handles removal from 'Watching' list as well
     const toggleWatchlistAction = async (id, type, button) => {
         const user = auth.currentUser;
         if (!user) {
-            showToast('Please login to use the watchlist feature.');
+            showToast('Please login to use this feature.');
             loginModalBackdrop.classList.remove('hidden');
             return;
         }
-
+    
         const isInWatchlist = watchlistItems.some(item => item.id == id);
-        const itemRef = db.collection('users').doc(user.uid).collection('watchlist').doc(String(id));
-
+        const isInWatching = watchingItems.some(item => item.id == id);
+        const isCurrentlyActive = isInWatchlist || isInWatching;
+    
+        const watchlistItemRef = db.collection('users').doc(user.uid).collection('watchlist').doc(String(id));
+        const watchingItemRef = db.collection('users').doc(user.uid).collection('watching').doc(String(id));
+    
         if (button) {
             button.disabled = true;
-            // Optimistically update the clicked button for immediate feedback
-            button.classList.toggle('in-watchlist', !isInWatchlist);
-            button.title = !isInWatchlist ? "Remove from Watchlist" : "Add to Watchlist";
+            button.classList.toggle('in-watchlist', !isCurrentlyActive);
+            button.title = !isCurrentlyActive ? "Remove from My Lists" : "Add to Watchlist";
         }
-
+    
         try {
-            if (isInWatchlist) {
-                await itemRef.delete();
-                showToast('Removed from Watchlist');
+            if (isCurrentlyActive) {
+                // If it's active, it could be in either list, so we try to delete from both.
+                if (isInWatchlist) await watchlistItemRef.delete();
+                if (isInWatching) await watchingItemRef.delete();
+                
+                showToast('Removed from your lists');
                 watchlistItems = watchlistItems.filter(item => item.id != id);
-                // If on watchlist page and item is removed, remove the card from DOM
-                if (isWatchlistMode && button && button.closest('.media-card-wrapper')) {
+                watchingItems = watchingItems.filter(item => item.id != id);
+                
+                if ((isWatchlistMode || isWatchingMode) && button && button.closest('.media-card-wrapper')) {
                     button.closest('.media-card-wrapper')?.remove();
                     if (mediaContainer.children.length === 0) noResults.classList.remove('hidden');
                 }
             } else {
+                // If it's not active, add it to the standard watchlist.
                 const itemDetails = await fetchFromApi(`${type}/${id}?append_to_response=seasons`);
                 const maxOrder = watchlistItems.reduce((max, item) => Math.max(max, typeof item.order === 'number' ? item.order : -1), -1);
                 const dataToSave = { ...itemDetails, media_type: type, date_added: new Date(), order: maxOrder + 1 };
-                await itemRef.set(dataToSave);
+                await watchlistItemRef.set(dataToSave);
                 showToast('Added to Watchlist');
                 watchlistItems.push(dataToSave);
             }
-            // Sync all other watchlist icons on the page to be sure
             updateAllCardWatchlistIcons();
         } catch (error) {
-            console.error("Failed to update watchlist:", error);
-            showToast("Error updating watchlist.");
-            // Revert optimistic UI on failure
+            console.error("Failed to update user lists:", error);
+            showToast("Error updating lists.");
             if (button) {
-                button.classList.toggle('in-watchlist', isInWatchlist);
-                button.title = isInWatchlist ? "Remove from Watchlist" : "Add to Watchlist";
+                button.classList.toggle('in-watchlist', isCurrentlyActive);
+                button.title = isCurrentlyActive ? "Remove from My Lists" : "Add to Watchlist";
             }
         } finally {
             if (button) {
@@ -382,7 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const dataToSave = { ...itemDetails, media_type: type, date_added: new Date() };
             await watchingItemRef.set(dataToSave);
             watchingItems.push(dataToSave);
-            showToast(`Added '${itemDetails.name}' to Watching`);
+            showToast(`Moved '${itemDetails.name}' to Watching`);
 
             if (watchlistItems.some(item => item.id == id)) {
                 await watchlistItemRef.delete();
@@ -510,6 +696,7 @@ document.addEventListener('DOMContentLoaded', () => {
             watchlistBtn.disabled = false;
             watchingItems = [];
             watchlistItems = [];
+            watchedProgress = {};
             if(isWatchingMode || isWatchlistMode) {
                 isWatchingMode = false;
                 isWatchlistMode = false;
@@ -583,7 +770,62 @@ document.addEventListener('DOMContentLoaded', () => {
     backToTopBtn.addEventListener('click', () => { window.scrollTo({ top: 0, behavior: 'smooth' }); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (modalHistory.length > 0) { goBackInModal(); } else if (searchInput.value.trim() !== '') { searchInput.value = ''; searchTerm = ''; handleSearch(); } else { closeAuthModal(); } } });
     document.addEventListener('click', () => { document.querySelectorAll('.custom-select-options.open').forEach(optionsContainer => { optionsContainer.classList.remove('open'); }); });
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && lastPlayedItem && lastPlayedItem.type === 'tv') { const itemToProcess = { ...lastPlayedItem }; lastPlayedItem = null; const seriesData = watchingItems.find(item => item.id === itemToProcess.id); if (!seriesData || !seriesData.seasons) { return; } let nextUp = null; const currentSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season); if (currentSeasonData && itemToProcess.episode < currentSeasonData.episode_count) { nextUp = { season: itemToProcess.season, episode: itemToProcess.episode + 1 }; } else { const nextSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season + 1); if (nextSeasonData && nextSeasonData.episode_count > 0) { nextUp = { season: nextSeasonData.season_number, episode: 1 }; } } if (nextUp) { const message = `Finished this Episode of ${itemToProcess.title}? (S. ${itemToProcess.season} Ep. ${itemToProcess.episode})`; const buttonText = `Watch Next`; const onAction = () => { const src = `https://vidsrc.to/embed/tv/${itemToProcess.id}/${nextUp.season}/${nextUp.episode}`; const watchedProgress = JSON.parse(localStorage.getItem('watchedProgress')) || {}; watchedProgress[itemToProcess.id] = { season: nextUp.season, episode: nextUp.episode }; localStorage.setItem('watchedProgress', JSON.stringify(watchedProgress)); lastPlayedItem = { ...itemToProcess, season: nextUp.season, episode: nextUp.episode }; window.open(src, '_blank'); const cardWrapper = document.querySelector(`.media-card[data-id="${seriesData.id}"]`)?.closest('.media-card-wrapper'); if (cardWrapper) { const seasonSelect = cardWrapper.querySelector('.player-season-select'); const episodeSelect = cardWrapper.querySelector('.player-episode-select'); if(seasonSelect) seasonSelect.value = nextUp.season; const selectedSeasonData = seriesData.seasons.find(s => s.season_number == nextUp.season); if (selectedSeasonData && episodeSelect) { episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count); episodeSelect.value = nextUp.episode; } } }; showNextEpisodeToast(message, buttonText, onAction); } } });
+    
+    // CHANGED: Now saves progress to Firestore instead of localStorage
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && lastPlayedItem && lastPlayedItem.type === 'tv') {
+            const itemToProcess = { ...lastPlayedItem };
+            lastPlayedItem = null;
+            const seriesData = watchingItems.find(item => item.id === itemToProcess.id);
+            if (!seriesData || !seriesData.seasons) { return; }
+    
+            let nextUp = null;
+            const currentSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season);
+            if (currentSeasonData && itemToProcess.episode < currentSeasonData.episode_count) {
+                nextUp = { season: itemToProcess.season, episode: itemToProcess.episode + 1 };
+            } else {
+                const nextSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season + 1);
+                if (nextSeasonData && nextSeasonData.episode_count > 0) {
+                    nextUp = { season: nextSeasonData.season_number, episode: 1 };
+                }
+            }
+    
+            if (nextUp) {
+                const message = `Finished S${itemToProcess.season}:E${itemToProcess.episode} of ${itemToProcess.title}?`;
+                const buttonText = `Watch Next`;
+                const onAction = async () => {
+                    const user = auth.currentUser;
+                    const src = `https://vidsrc.to/embed/tv/${itemToProcess.id}/${nextUp.season}/${nextUp.episode}`;
+                    
+                    if (user) {
+                        const progressRef = db.collection('users').doc(user.uid).collection('progress').doc(String(itemToProcess.id));
+                        const newProgress = { season: nextUp.season, episode: nextUp.episode };
+                        try {
+                            await progressRef.set(newProgress);
+                            watchedProgress[itemToProcess.id] = newProgress;
+                        } catch (error) { console.error("Failed to save next episode progress:", error); }
+                    }
+    
+                    lastPlayedItem = { ...itemToProcess, season: nextUp.season, episode: nextUp.episode };
+                    window.open(src, '_blank');
+                    
+                    const cardWrapper = document.querySelector(`.media-card[data-id="${seriesData.id}"]`)?.closest('.media-card-wrapper');
+                    if (cardWrapper) {
+                        const seasonSelect = cardWrapper.querySelector('.player-season-select');
+                        const episodeSelect = cardWrapper.querySelector('.player-episode-select');
+                        if(seasonSelect) seasonSelect.value = nextUp.season;
+                        const selectedSeasonData = seriesData.seasons.find(s => s.season_number == nextUp.season);
+                        if (selectedSeasonData && episodeSelect) {
+                            episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count);
+                            episodeSelect.value = nextUp.episode;
+                        }
+                    }
+                };
+                showNextEpisodeToast(message, buttonText, onAction);
+            }
+        }
+    });
+
     const observer = new IntersectionObserver(entries => { if (entries[0].isIntersecting && !isLoading) { if (isActorSearchMode && searchTerm.length === 0) { if (currentPage < totalPages) { currentPage++; fetchAndDisplayPopularActors(currentPage, true); } } else if (!isWatchlistMode && !isWatchingMode && !isActorSearchMode) { if (currentPage < totalPages) { currentPage++; fetchAndDisplayMedia(currentPage, true); } } } }, { rootMargin: '200px' });
     observer.observe(sentinel);
     
