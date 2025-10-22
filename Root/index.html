@@ -1,1 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="https://tinyurl.com/24bsktut" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CineHub | Watch Films & TV Series Online</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/index.css">
+</head>
+<body>
 
+    <header id="app-header" class="app-header">
+        <div class="container header-container">
+            <div class="header-top-section">
+                <div class="header-left">
+                   <h1 class="logo-title">
+                        <a href="index.html"><img src="https://tinyurl.com/2bjdz5vm" alt="CineHub Logo" class="logo-image"/></a>
+                    </h1>
+                </div>
+                <div class="header-right">
+                    <button id="watching-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-eye"></i>⠀Watching</button>
+                    <button id="watchlist-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-bookmark"></i>⠀Watchlist</button>
+                    <button id="login-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-user"></i> Login</button>
+                    <button id="logout-btn" class="media-type-btn watchlist-btn-lx hidden"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+                    <div class="search-controls">
+                        <div class="search-container">
+                            <i class="fas fa-search search-icon"></i>
+                            <input
+                                id="search-input"
+                                type="text"
+                                placeholder="Films or Actors..."
+                                class="search-input"
+                            />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div id="hero-banner" class="hero-banner hidden">
+        <!-- Hero content will be populated by JS -->
+    </div>
+
+    <main class="container">
+         <div class="filters-bar">
+            <div class="media-type-toggle">
+                <button id="movie-type-btn" class="media-type-btn active">Films</button>
+                <button id="tv-type-btn" class="media-type-btn">TV Series</button>
+                <button id="actor-search-toggle" class="media-type-btn">Actors</button>
+            </div>
+            <div id="network-filter-wrapper" class="custom-select-wrapper"></div>
+            <div id="sort-by-wrapper" class="custom-select-wrapper hidden"></div>
+            <div id="genre-filter-wrapper" class="custom-select-wrapper"></div>
+            <div id="year-filter-wrapper" class="custom-select-wrapper"></div>
+            <div id="country-filter-wrapper" class="custom-select-wrapper"></div>
+            <div id="language-filter-wrapper" class="custom-select-wrapper"></div>
+            <button id="reset-filters-btn" class="reset-button"><i class="fas fa-undo"></i>Reset</button>
+        </div>
+        
+        <div id="sort-controls" class="sort-controls hidden">
+            <button id="sort-default-btn" class="sort-btn">Default</button>
+            <button id="sort-year-btn" class="sort-btn">Year</button>
+            <button id="sort-rate-btn" class="sort-btn">Rate</button>
+            <button id="sort-popularity-btn" class="sort-btn">Popularity</button>
+        </div>
+
+        <div id="media-container" class="media-grid">
+            <!-- Media cards will be inserted here -->
+        </div>
+
+        <div id="loader" class="loader-container hidden">
+             <div class="spinner"></div>
+        </div>
+
+        <div id="no-results" class="no-results-container hidden">
+            <p>No results found.</p>
+            <p>Try adjusting your search or filters.</p>
+        </div>
+
+        <div id="sentinel"></div>
+    </main>
+    
+    <div id="modal-container">
+        <!-- Modal will be inserted here -->
+    </div>
+
+    <!-- START: Login Modal -->
+    <div id="login-modal-backdrop" class="modal-backdrop hidden">
+        <div class="modal-content auth-modal">
+            <button class="modal-close-btn" id="login-modal-close">&times;</button>
+            <h2 class="modal-title">Login</h2>
+            <div class="auth-form">
+                <input type="email" id="login-email" placeholder="Email" autocomplete="email">
+                <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
+                <button id="login-submit-btn" class="auth-submit-btn">Login</button>
+            </div>
+        </div>
+    </div>
+    <!-- END: Login Modal (Signup Modal Removed) -->
+    
+    <button id="back-to-top-btn" class="back-to-top-btn hidden" title="Go to top">
+        <i class="fa-solid fa-angle-up"></i>
+    </button>
+
+    <div id="toast-notification" class="toast-notification"></div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+
+    <!-- START: Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script>
+      // Your web app's Firebase configuration
+      const firebaseConfig = {
+        apiKey: "AIzaSyBkl7-oJtAPuNSCGb1Xkfp8b50Yb9CtYc4",
+        authDomain: "cinehub-inc.firebaseapp.com",
+        projectId: "cinehub-inc",
+        storageBucket: "cinehub-inc.firebasestorage.app",
+        messagingSenderId: "445232433535",
+        appId: "1:445232433535:web:198906816d98fc6c17724a"
+      };
+
+      // Initialize Firebase
+      if (firebase.apps.length === 0) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      const auth = firebase.auth();
+      const db = firebase.firestore();
+    </script>
+    <!-- END: Firebase SDKs -->
+
+    <script src="script.js"></script>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>
