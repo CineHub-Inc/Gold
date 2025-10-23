@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const formatRuntime = (minutes) => { if (!minutes || minutes === 0) return 'N/A'; const hours = Math.floor(minutes / 60); const mins = minutes % 60; return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`; };
     const generateEpisodeOptions = (episodeCount) => { if (!episodeCount || episodeCount === 0) return '<option>N/A</option>'; return Array.from({ length: episodeCount }, (_, i) => `<option value="${i + 1}">Ep ${i + 1}</option>`).join(''); };
 
-    // CHANGED: Opens player in a modal and attempts to go fullscreen
+    // CHANGED: Now saves progress to Firestore
     const openPlayer = async (id, type, controlsContainer, mediaDetails) => {
         const user = auth.currentUser;
         const isTV = type === 'tv';
@@ -175,22 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             src = `https://vidsrc.to/embed/movie/${id}`;
             lastPlayedItem = null;
         }
-
-        const content = `
-            <div class="trailer-wrapper">
-                <iframe 
-                    class="trailer-iframe" 
-                    src="${src}" 
-                    title="Video Player" 
-                    frameborder="0" 
-                    allow="autoplay; encrypted-media; picture-in-picture" 
-                    allowfullscreen 
-                    onload="this.requestFullscreen().catch(err => { console.error('Could not automatically enter fullscreen:', err.message); });">
-                </iframe>
-            </div>
-        `;
-    
-        _setModalContent(content, { isTrailer: true });
+        window.open(src, '_blank');
     };
 
     const createPersonCardElement = (person) => { if (!person.profile_path) return null; const title = person.name; const posterUrl = `https://image.tmdb.org/t/p/w500${person.profile_path}`; const escapedName = title.replace(/'/g, "\\'"); const wrapper = document.createElement('div'); wrapper.className = 'media-card-wrapper'; const card = document.createElement('div'); card.className = 'media-card'; card.dataset.id = person.id; card.dataset.type = 'person'; card.dataset.detailsLoaded = 'false'; card.onclick = () => showFilmography(person.id, escapedName); card.innerHTML = `<img src="${posterUrl}" alt="Photo of ${title}" class="media-card-poster" loading="lazy"/><div class="media-card-overlay"><div class="details-pane"><div class="details-spinner"><div class="spinner-small"></div></div><div class="details-content hidden"><div class="details-text-container"><div class="person-name-text"><strong>${title}</strong></div><div class="nationality-text-container hidden"><strong><i class="fa-solid fa-location-dot" aria-hidden="true"></i></strong>⠀<span class="nationality-text"></span></div><div class="age-text-container hidden"><strong><i class="fa-solid fa-cake-candles" aria-hidden="true"></i></strong>⠀<span class="age-text"></span></div></div></div></div></div>`; wrapper.appendChild(card); return wrapper; };
@@ -822,22 +807,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
     
                     lastPlayedItem = { ...itemToProcess, season: nextUp.season, episode: nextUp.episode };
-                    
-                    // Open the next episode in the modal
-                    const content = `
-                        <div class="trailer-wrapper">
-                            <iframe 
-                                class="trailer-iframe" 
-                                src="${src}" 
-                                title="Video Player" 
-                                frameborder="0" 
-                                allow="autoplay; encrypted-media; picture-in-picture" 
-                                allowfullscreen
-                                onload="this.requestFullscreen().catch(err => { console.error('Could not automatically enter fullscreen:', err.message); });">
-                            </iframe>
-                        </div>
-                    `;
-                    _setModalContent(content, { isTrailer: true });
+                    window.open(src, '_blank');
                     
                     const cardWrapper = document.querySelector(`.media-card[data-id="${seriesData.id}"]`)?.closest('.media-card-wrapper');
                     if (cardWrapper) {
