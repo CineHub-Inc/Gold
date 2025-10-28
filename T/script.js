@@ -61,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const watchlistBtn = document.getElementById('watchlist-btn');
     const actorSearchToggle = document.getElementById('actor-search-toggle');
     const searchInput = document.getElementById('search-input');
+    const searchResultsDropdown = document.getElementById('search-results-dropdown');
     const mediaContainer = document.getElementById('media-container');
     const loader = document.getElementById('loader');
     const noResults = document.getElementById('no-results');
@@ -81,7 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const sortYearBtn = document.getElementById('sort-year-btn');
     const sortRateBtn = document.getElementById('sort-rate-btn');
     const sortPopularityBtn = document.getElementById('sort-popularity-btn');
-    const liveSearchResultsContainer = document.getElementById('live-search-results');
     
     // --- AUTH DOM ELEMENTS (Updated) ---
     const loginBtn = document.getElementById('login-btn');
@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginModalBackdrop = document.getElementById('login-modal-backdrop');
     const loginModalClose = document.getElementById('login-modal-close');
     const loginSubmitBtn = document.getElementById('login-submit-btn');
+    const loginEmailInput = document.getElementById('login-email');
     const loginPasswordInput = document.getElementById('login-password');
 
     // --- HELPERS ---
@@ -344,94 +345,96 @@ document.addEventListener('DOMContentLoaded', () => {
     window.showCast = async (id, type) => { let content; try { const [{ cast }, mediaDetails] = await Promise.all([fetchFromApi(`${type}/${id}/credits?language=en-US`), fetchFromApi(`${type}/${id}?language=en-US`)]); const releaseDateStr = mediaDetails.release_date || mediaDetails.first_air_date; const releaseDate = releaseDateStr ? new Date(releaseDateStr) : null; const castToDisplay = (cast || []).slice(0, 15); const personDetailsPromises = castToDisplay.map(member => fetchFromApi(`person/${member.id}?language=en-US`)); const personDetails = await Promise.all(personDetailsPromises); let castGridHTML = ''; castToDisplay.forEach((member, index) => { const details = personDetails[index]; const profileUrl = member.profile_path ? `https://image.tmdb.org/t/p/w200${member.profile_path}` : UNAVAILABLE_IMAGE_URL; const currentAge = calculateAge(details.birthday); let ageDisplay = currentAge; if (releaseDate && details.birthday) { const birthDate = new Date(details.birthday); let ageAtRelease = releaseDate.getFullYear() - birthDate.getFullYear(); const monthDiff = releaseDate.getMonth() - birthDate.getMonth(); if (monthDiff < 0 || (monthDiff === 0 && releaseDate.getDate() < birthDate.getDate())) { ageAtRelease--; } if (ageAtRelease >= 0) { ageDisplay += ` (${ageAtRelease})`; } } const nationality = details.place_of_birth ? details.place_of_birth.split(',').pop().trim() : 'N/A'; const escapedName = member.name.replace(/'/g, "\\'"); castGridHTML += `<div class="cast-member" onclick="showFilmography(${member.id}, '${escapedName}')"><img src="${profileUrl}" alt="${member.name}" class="cast-member-image" /><p class="cast-member-name">${member.name}</p><p class="cast-member-character"><i class="fa-solid fa-masks-theater"></i> ${member.character}</p><p class="cast-member-meta"><i class="fa-solid fa-location-dot"></i> ${nationality}</p><p class="cast-member-meta"><i class="fa-solid fa-cake-candles"></i> ${ageDisplay}</p></div>`; }); content = `<h2 class="modal-title">Cast</h2><div class="cast-grid">${castGridHTML}</div>`; } catch (error) { console.error("Failed to fetch person details for cast:", error); content = `<h2 class="modal-title">Cast</h2><p class="modal-body-text" style="text-align: center;">Could not load cast details.</p>`; } const options = { isNavigable: modalHistory.length > 0 }; _setModalContent(content, options); modalHistory.push({ content, options }); };
     window.showFilmography = async (personId, name) => { let content; try { const [{ cast }, personDetails, excludedFilmographyGenreIds] = await Promise.all([fetchFromApi(`person/${personId}/combined_credits?language=en-US`), fetchFromApi(`person/${personId}?language=en-US`), Promise.all([getExcludedGenreIds('movie'), getExcludedGenreIds('tv')]).then(res => [...new Set(res.flat())])]); const filteredCredits = (cast || []).filter(item => { if (item.media_type !== 'movie' && item.media_type !== 'tv') return false; if (!item.poster_path) return false; if (item.media_type === 'movie' && !item.release_date) return false; if (item.media_type === 'tv' && !item.first_air_date) return false; return !isItemExcluded(item, excludedFilmographyGenreIds); }); const films = filteredCredits.filter(item => item.media_type === 'movie').sort((a, b) => new Date(b.release_date) - new Date(a.release_date)); const tvSeries = filteredCredits.filter(item => item.media_type === 'tv').sort((a, b) => new Date(b.first_air_date) - new Date(a.first_air_date)); const createGridHTML = (items) => { if (!items || items.length === 0) return ''; let gridHTML = '<div class="filmography-grid">'; items.forEach(item => { const posterUrl = `https://image.tmdb.org/t/p/w200${item.poster_path}`; const title = (item.title || item.name || '').replace(/'/g, "\\'"); const releaseYear = (item.release_date || item.first_air_date || 'N/A').substring(0, 4); const voteAverage = item.vote_average ? item.vote_average.toFixed(1) : 'N/A'; gridHTML += `<div class="filmography-item" onclick="showFilmographyItemDetails(${item.id}, '${item.media_type}')"><img src="${posterUrl}" alt="${title}" class="filmography-item-poster"/><div class="filmography-item-overlay"><div class="filmography-item-meta"><span>${releaseYear}</span><div class="filmography-item-rating"><i class="fas fa-star"></i><span>${voteAverage}</span></div></div></div></div>`; }); gridHTML += '</div>'; return gridHTML; }; const encodedName = encodeURIComponent(name); const imdbId = personDetails.imdb_id; let finalHTML = `<div class="modal-title-container"><h2 class="modal-title">Filmography of ${name}</h2><a href="https://www.google.com/search?q=${encodedName}" target="_blank" class="external-link-btn" title="Search for ${name} on Google"><i class="fab fa-google"></i></a>`; if (imdbId) { finalHTML += `<a href="https://www.imdb.com/name/${imdbId}/" target="_blank" class="external-link-btn" title="View ${name} on IMDb"><i class="fab fa-imdb"></i></a>`; } finalHTML += '</div>'; if (films.length > 0) { finalHTML += `<h4 style="font-size: 1.25rem; font-weight: 600; color: #3c4148; margin-top: 1.5rem;">Films</h4>`; finalHTML += createGridHTML(films); } if (tvSeries.length > 0) { finalHTML += `<h4 style="font-size: 1.25rem; font-weight: 600; color: #3c4148; margin-top: 1.5rem;">TV Series</h4>`; finalHTML += createGridHTML(tvSeries); } if (films.length === 0 && tvSeries.length === 0) { finalHTML += `<p class="modal-body-text" style="text-align: center; margin-top: 1rem;">No filmography found.</p>`; } content = `<div data-filmography-person-id="${personId}">${finalHTML}</div>`; } catch (error) { content = `<h2 class="modal-title">Filmography of ${name}</h2><p class="modal-body-text" style="text-align: center;">Could not load filmography.</p>`; } const options = { isNavigable: modalHistory.length > 0 }; _setModalContent(content, options); modalHistory.push({ content, options }); };
     window.showFilmographyItemDetails = async (itemId, itemType) => { let content; try { const details = await fetchFromApi(`${itemType}/${itemId}?language=en-US`); const posterUrl = details.poster_path ? `https://image.tmdb.org/t/p/w500${details.poster_path}` : UNAVAILABLE_IMAGE_URL; const title = details.title || details.name || "Unknown Title"; const overview = details.overview || "No synopsis available."; const releaseYear = (details.release_date || details.first_air_date || 'N/A').substring(0, 4); const rating = details.vote_average ? `${details.vote_average.toFixed(1)}/10` : 'N/A'; const country = details.production_countries?.[0]?.name.replace('United States of America', 'USA').replace('United Kingdom', 'UK') || 'N/A'; const language = details.spoken_languages?.[0]?.english_name || 'N/A'; const genres = details.genres?.map(g => g.name).join(', ') || 'N/A'; const runtime = details.runtime || (details.episode_run_time ? details.episode_run_time[0] : null); const formattedRuntime = runtime ? `${Math.floor(runtime/60)}h ${runtime%60}m` : 'N/A'; content = document.createElement('div'); content.className = 'filmography-detail-container'; content.dataset.id = itemId; content.innerHTML = `<div class="filmography-detail-view"><img src="${posterUrl}" alt="Poster for ${title}" class="filmography-detail-poster"/><div class="filmography-detail-info"><h3>${title}</h3><div class="film-meta-grid"><div><strong><i class="fa-regular fa-star"></i></strong> ${rating}</div><div><strong><i class="fa-regular fa-calendar"></i></strong> ${releaseYear}</div><div><strong><i class="fa-solid fa-earth-americas"></i></strong> ${country}</div><div><strong><i class="fa-regular fa-message"></i></strong> ${language}</div><div><strong><i class="fa-solid fa-clapperboard"></i></strong> ${genres}</div><div><strong><i class="fa-regular fa-clock"></i></strong> ${formattedRuntime}</div></div><p class="filmography-detail-synopsis">${overview}</p><div class="details-buttons full-width"><button class="details-btn watchlist-btn" title="Add to Watchlist"><i class="fas fa-bookmark"></i> Watchlist</button><button class="details-btn trailer-btn" title="Watch Trailer"><i class="fas fa-play"></i> Trailer</button><button class="details-btn cast-btn" title="View Cast"><i class="fa-solid fa-user-group"></i> Cast</button></div></div></div>`; updateAllCardWatchlistIcons(); content.querySelector('.watchlist-btn').onclick = (e) => { e.stopPropagation(); toggleWatchlistAction(itemId, itemType, e.currentTarget); }; content.querySelector('.trailer-btn').onclick = (e) => { e.stopPropagation(); showTrailer(itemId, itemType); }; content.querySelector('.cast-btn').onclick = (e) => { e.stopPropagation(); showCast(itemId, itemType); }; } catch (error) { console.error("Failed to fetch item details from filmography:", error); content = document.createElement('div'); content.innerHTML = `<p class="modal-body-text" style="text-align: center;">Could not load details.</p>`; } const options = { isNavigable: true }; _setModalContent(content, options); modalHistory.push({ content, options }); };
-    const debounce = (func, delay) => { let timeout; return (...args) => { clearTimeout(timeout); timeout = setTimeout(() => func.apply(this, args), delay); }; };
+    
+    const debounce = (func, delay) => {
+        let timeout;
+        const debounced = (...args) => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), delay);
+        };
+        debounced.cancel = () => {
+            clearTimeout(timeout);
+        };
+        return debounced;
+    };
     const throttle = (func, limit) => { let inThrottle; return function(...args) { const context = this; if (!inThrottle) { func.apply(context, args); inThrottle = true; setTimeout(() => inThrottle = false, limit); } }; };
     
-    // --- LIVE SEARCH LOGIC (NEW) ---
-    const hideLiveSearch = () => {
-        liveSearchResultsContainer.classList.add('hidden');
-        liveSearchResultsContainer.innerHTML = '';
-    };
+    const handleSearch = () => { currentPage = 1; totalPages = 1; if (isActorSearchMode) { if (searchTerm.length > 2) { fetchAndDisplayActors(); } else if (searchTerm.length === 0) { fetchAndDisplayPopularActors(); } else { mediaContainer.innerHTML = ''; noResults.classList.add('hidden'); loader.classList.add('hidden'); } } else { (isWatchlistMode || isWatchingMode) ? displayUserLists() : resetAndFetch(); } };
+    const debouncedSearch = debounce(handleSearch, 1000);
+    
+    const handleResize = debounce(() => { updateFiltersUI(); const canShowHero = window.innerWidth >= 1024; const isDiscover = !isActorSearchMode && !isWatchlistMode && !isWatchingMode; const heroHasContent = heroItems.length > 0; if (canShowHero && isDiscover && !heroHasContent) { fetchAndDisplayHeroBanner(); } }, 250);
+    const handleSortChange = (newSort) => { if (isActorSearchMode || isWatchlistMode || isWatchingMode) return; if (activeSort === newSort && newSort !== 'default') { sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; } else { sortOrder = 'desc'; } activeSort = newSort; updateSortButtonsUI(); resetAndFetch(); };
 
-    const displayLiveSearchResults = (results) => {
-        liveSearchResultsContainer.innerHTML = '';
-        if (!results || results.length === 0) {
-            liveSearchResultsContainer.innerHTML = '<div class="live-search-no-results">No matches found.</div>';
-            liveSearchResultsContainer.classList.remove('hidden');
+    // --- LIVE SEARCH LOGIC ---
+    const renderSearchResults = ({ movies, tvSeries, actors }) => {
+        searchResultsDropdown.innerHTML = '';
+        if (movies.length === 0 && tvSeries.length === 0 && actors.length === 0) {
+            searchResultsDropdown.classList.add('hidden');
             return;
         }
 
-        const movies = results.filter(r => r.media_type === 'movie' && r.poster_path).slice(0, 3);
-        const tvShows = results.filter(r => r.media_type === 'tv' && r.poster_path).slice(0, 2);
-        const actors = results.filter(r => r.media_type === 'person' && r.profile_path).slice(0, 2);
-
         let html = '';
-
-        const createItemHTML = (item) => {
-            const title = item.title || item.name;
-            const escapedTitle = title.replace(/'/g, "\\'");
-            const posterUrl = item.poster_path ? `https://image.tmdb.org/t/p/w200${item.poster_path}` : (item.profile_path ? `https://image.tmdb.org/t/p/w200${item.profile_path}` : UNAVAILABLE_IMAGE_URL);
-            const releaseYear = (item.release_date || item.first_air_date || '').substring(0, 4);
-            const meta = item.media_type === 'person' ? (item.known_for_department || '') : releaseYear;
-
-            let clickAction;
-            if (item.media_type === 'person') {
-                clickAction = `showFilmography(${item.id}, '${escapedTitle}')`;
-            } else {
-                clickAction = `showSynopsis(${item.id}, '${item.media_type}', '${escapedTitle}')`;
-            }
+        const createItemHTML = (item, type) => {
+            const posterPath = type === 'person' ? item.profile_path : item.poster_path;
+            const posterUrl = posterPath ? `https://image.tmdb.org/t/p/w92${posterPath}` : UNAVAILABLE_IMAGE_URL;
+            const title = type === 'movie' ? item.title : item.name;
+            const year = type === 'person' ? 'Actor' : ((item.release_date || item.first_air_date || '').substring(0, 4) || 'N/A');
+            const nameAttr = type === 'person' ? `data-name="${title.replace(/'/g, "\\'")}"` : '';
 
             return `
-                <div class="live-search-item" onclick="${clickAction}; document.getElementById('live-search-results').classList.add('hidden');">
-                    <img src="${posterUrl}" alt="${title}" class="live-search-item-thumbnail" loading="lazy"/>
-                    <div class="live-search-item-info">
-                        <div class="live-search-item-title">${title}</div>
-                        <div class="live-search-item-meta">${meta}</div>
+                <div class="search-result-item" data-id="${item.id}" data-type="${type}" ${nameAttr}>
+                    <img src="${posterUrl}" alt="${title}" class="search-result-thumbnail" loading="lazy" />
+                    <div class="search-result-info">
+                        <div class="search-result-title">${title}</div>
+                        <div class="search-result-meta">${year}</div>
                     </div>
                 </div>`;
         };
-        
+
         if (movies.length > 0) {
-            html += '<div class="live-search-category">Films</div>';
-            html += movies.map(createItemHTML).join('');
+            html += `<div class="search-result-category">Films</div>`;
+            movies.forEach(item => html += createItemHTML(item, 'movie'));
         }
-        if (tvShows.length > 0) {
-            html += '<div class="live-search-category">TV Series</div>';
-            html += tvShows.map(createItemHTML).join('');
+        if (tvSeries.length > 0) {
+            html += `<div class="search-result-category">TV Series</div>`;
+            tvSeries.forEach(item => html += createItemHTML(item, 'tv'));
         }
         if (actors.length > 0) {
-            html += '<div class="live-search-category">Actors</div>';
-            html += actors.map(createItemHTML).join('');
+            html += `<div class="search-result-category">Actors</div>`;
+            actors.forEach(item => html += createItemHTML(item, 'person'));
         }
 
-        if (html) {
-            liveSearchResultsContainer.innerHTML = html;
-            liveSearchResultsContainer.classList.remove('hidden');
-        } else {
-            hideLiveSearch();
-        }
+        searchResultsDropdown.innerHTML = html;
+        searchResultsDropdown.classList.remove('hidden');
+
+        searchResultsDropdown.querySelectorAll('.search-result-item').forEach(item => {
+            item.addEventListener('click', () => {
+                debouncedSearch.cancel(); // Prevent full search from triggering
+                const id = item.dataset.id;
+                const type = item.dataset.type;
+                if (type === 'person') {
+                    showFilmography(id, item.dataset.name);
+                } else {
+                    showFilmographyItemDetails(id, type);
+                }
+                searchResultsDropdown.classList.add('hidden');
+            });
+        });
     };
 
-    const fetchLiveSearchResults = async () => {
-        if (searchTerm.length < 3) {
-            hideLiveSearch();
-            return;
-        }
+    const fetchLiveSearchResults = async (query) => {
         try {
-            const data = await fetchFromApi(`search/multi?query=${encodeURIComponent(searchTerm)}&include_adult=false&language=en-US&page=1`);
-            displayLiveSearchResults(data.results);
+            const data = await fetchFromApi(`search/multi?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`);
+            const results = data.results || [];
+            const movies = results.filter(r => r.media_type === 'movie' && r.poster_path).slice(0, 3);
+            const tvSeries = results.filter(r => r.media_type === 'tv' && r.poster_path).slice(0, 2);
+            const actors = results.filter(r => r.media_type === 'person' && r.profile_path && r.known_for_department === 'Acting').slice(0, 2);
+            renderSearchResults({ movies, tvSeries, actors });
         } catch (error) {
-            console.error("Live search fetch failed:", error);
-            hideLiveSearch();
+            console.error("Live search failed:", error);
+            searchResultsDropdown.classList.add('hidden');
         }
     };
-    
-    // --- MAIN SEARCH LOGIC ---
-    const handleSearch = () => { currentPage = 1; totalPages = 1; hideLiveSearch(); if (isActorSearchMode) { if (searchTerm.length > 2) { fetchAndDisplayActors(); } else if (searchTerm.length === 0) { fetchAndDisplayPopularActors(); } else { mediaContainer.innerHTML = ''; noResults.classList.add('hidden'); loader.classList.add('hidden'); } } else { (isWatchlistMode || isWatchingMode) ? displayUserLists() : resetAndFetch(); } };
-    const debouncedLiveSearch = debounce(fetchLiveSearchResults, 500);
-    const debouncedSearch = debounce(handleSearch, 1000);
-    const handleResize = debounce(() => { updateFiltersUI(); const canShowHero = window.innerWidth >= 1024; const isDiscover = !isActorSearchMode && !isWatchlistMode && !isWatchingMode; const heroHasContent = heroItems.length > 0; if (canShowHero && isDiscover && !heroHasContent) { fetchAndDisplayHeroBanner(); } }, 250);
-    const handleSortChange = (newSort) => { if (isActorSearchMode || isWatchlistMode || isWatchingMode) return; if (activeSort === newSort && newSort !== 'default') { sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; } else { sortOrder = 'desc'; } activeSort = newSort; updateSortButtonsUI(); resetAndFetch(); };
 
     // --- WATCHLIST LOGIC (UPDATED FOR FIREBASE) ---
     const initSortable = () => {
@@ -675,14 +678,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loginBtn.addEventListener('click', showLoginModal);
     loginModalClose.addEventListener('click', closeAuthModal);
-    loginModalBackdrop.addEventListener('click', (e) => {
-        if (e.target === loginModalBackdrop) {
-            closeAuthModal();
-        }
-    });
 
     // NEW/CHANGED LOGIC: Complete rewrite of the login handler for robust session management.
-    const handleLogin = async () => {
+    loginSubmitBtn.addEventListener('click', async () => {
         const email = document.getElementById('login-email').value;
         const password = document.getElementById('login-password').value;
         if (!email || !password) {
@@ -720,14 +718,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             // This will now only catch standard auth errors (wrong password, etc.)
             showToast(`Login Error: ${error.message}`);
-        }
-    };
-
-    loginSubmitBtn.addEventListener('click', handleLogin);
-    // NEW: Allow 'Enter' key to submit login
-    loginPasswordInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            handleLogin();
         }
     });
     
@@ -856,16 +846,29 @@ document.addEventListener('DOMContentLoaded', () => {
     movieTypeBtn.addEventListener('click', () => { if (mediaType === 'movie' && !isActorSearchMode) return; if (mediaType !== 'movie') { selectedNetwork = ''; if (customSelects.network) customSelects.network.reset(); } isActorSearchMode = false; actorSearchToggle.classList.remove('active'); isWatchingMode = false; watchingBtn.classList.remove('active'); mediaType = 'movie'; movieTypeBtn.classList.add('active'); tvTypeBtn.classList.remove('active'); fetchAndDisplayHeroBanner(); updateFiltersUI(); isWatchlistMode ? displayUserLists() : resetAndFetch(); });
     tvTypeBtn.addEventListener('click', () => { if (mediaType === 'tv' && !isActorSearchMode) return; isActorSearchMode = false; actorSearchToggle.classList.remove('active'); isWatchingMode = false; watchingBtn.classList.remove('active'); mediaType = 'tv'; tvTypeBtn.classList.add('active'); movieTypeBtn.classList.remove('active'); fetchAndDisplayHeroBanner(); updateFiltersUI(); isWatchlistMode ? displayUserLists() : resetAndFetch(); });
     
-    searchInput.addEventListener('input', (e) => { 
-        searchTerm = e.target.value; 
-        // Trigger both live search (quick) and main grid search (slower)
-        debouncedLiveSearch();
-        debouncedSearch(); 
+    let liveSearchDebounceTimeout = null;
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value;
+        searchTerm = query;
+    
+        clearTimeout(liveSearchDebounceTimeout);
+        if (query.length > 2) {
+            liveSearchDebounceTimeout = setTimeout(() => {
+                fetchLiveSearchResults(query);
+            }, 300);
+        } else {
+            searchResultsDropdown.classList.add('hidden');
+        }
+    
+        debouncedSearch();
     });
-    // NEW: Hide live search dropdown when input loses focus
-    searchInput.addEventListener('blur', () => {
-        // Delay hiding to allow click events on dropdown items to fire
-        setTimeout(hideLiveSearch, 200);
+
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            searchResultsDropdown.classList.add('hidden');
+            debouncedSearch.cancel();
+            handleSearch();
+        }
     });
 
     resetBtn.addEventListener('click', () => { searchTerm = ''; selectedGenre = ''; selectedYear = ''; selectedCountry = ''; selectedLanguage = ''; selectedNetwork = ''; activeSort = 'default'; sortOrder = 'desc'; updateSortButtonsUI(); currentPage = 1; totalPages = 1; searchInput.value = ''; Object.values(customSelects).forEach(s => s.reset()); if (isWatchlistMode || isWatchingMode) { displayUserLists(); } else if (isActorSearchMode) { fetchAndDisplayPopularActors(); } else { resetAndFetch(); } });
@@ -877,8 +880,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const handleScroll = () => { const scrollTop = window.scrollY || document.documentElement.scrollTop; header.classList.toggle('scrolled', scrollTop > 50); if (filtersBar) { backToTopBtn.classList.toggle('hidden', scrollTop < filtersBar.offsetHeight + filtersBar.offsetTop); } };
     window.addEventListener('scroll', throttle(handleScroll, 150));
     backToTopBtn.addEventListener('click', () => { window.scrollTo({ top: 0, behavior: 'smooth' }); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (modalHistory.length > 0) { goBackInModal(); } else if (searchInput.value.trim() !== '') { searchInput.value = ''; searchTerm = ''; hideLiveSearch(); handleSearch(); } else { closeAuthModal(); } } });
-    document.addEventListener('click', () => { document.querySelectorAll('.custom-select-options.open').forEach(optionsContainer => { optionsContainer.classList.remove('open'); }); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (modalHistory.length > 0) { goBackInModal(); } else if (searchInput.value.trim() !== '') { searchInput.value = ''; searchTerm = ''; handleSearch(); } else { closeAuthModal(); } } });
+    
+    const handleLoginKeyPress = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            loginSubmitBtn.click();
+        }
+    };
+    loginEmailInput.addEventListener('keydown', handleLoginKeyPress);
+    loginPasswordInput.addEventListener('keydown', handleLoginKeyPress);
+
+    document.addEventListener('click', (e) => { 
+        document.querySelectorAll('.custom-select-options.open').forEach(optionsContainer => { optionsContainer.classList.remove('open'); });
+        if (!searchResultsDropdown.classList.contains('hidden') && !searchInput.contains(e.target) && !searchResultsDropdown.contains(e.target)) {
+            searchResultsDropdown.classList.add('hidden');
+        }
+    });
     
     // CHANGED: Now saves progress to Firestore instead of localStorage
     document.addEventListener('visibilitychange', () => {
