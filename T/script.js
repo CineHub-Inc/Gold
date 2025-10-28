@@ -1,3 +1,5 @@
+
+
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE ---
     const API_V3_KEY = '329f898e5642c90715fd2b4a81f0e2d6';
@@ -25,7 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isWatchingMode = false;
     let watchlistItems = [];
     let watchingItems = [];
-    // NEW: Firestore-backed progress tracking
+    // NEW: Firestore-backed progress tracking for individual episodes
     let watchedProgress = {};
     let selectedSort = 'date_added_desc';
     let selectedNetwork = '';
@@ -97,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const isExcludedByKeyword = (title) => { if (!title) return false; return EXCLUDED_KEYWORDS.some(keyword => title.toLowerCase().includes(keyword)); };
     const isItemExcluded = (item, excludedGenreIds) => { const title = (item.title || item.name || '').toLowerCase(); if (EXCLUDED_TITLES.includes(title)) return true; if (isExcludedByKeyword(title)) return true; if (!item.genre_ids || item.genre_ids.length === 0) return true; if (excludedGenreIds && item.genre_ids.some(id => excludedGenreIds.includes(id))) return true; return false; };
     const shuffleArray = (array) => { for (let i = array.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [array[i], array[j]] = [array[j], array[i]]; } return array; };
+    const formatAirDate = (dateString) => { if (!dateString) return 'TBA'; const date = new Date(dateString); if (isNaN(date.getTime())) return 'TBA'; return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); };
 
     // --- API SERVICE ---
     const fetchFromApi = async (endpoint, options = {}, useV4Auth = false) => {
@@ -122,57 +125,71 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateSortButtonsUI = () => { const buttons = [{ el: sortDefaultBtn, key: 'default' }, { el: sortYearBtn, key: 'year' }, { el: sortRateBtn, key: 'rate' }, { el: sortPopularityBtn, key: 'popularity' }]; buttons.forEach(btn => { btn.el.classList.remove('active'); const oldIcon = btn.el.querySelector('.sort-icon'); if (oldIcon) oldIcon.remove(); if (btn.key === activeSort) { btn.el.classList.add('active'); if (activeSort !== 'default') { const icon = document.createElement('i'); icon.className = `fas fa-arrow-${sortOrder === 'desc' ? 'down' : 'up'} sort-icon`; btn.el.appendChild(icon); } } }); };
     const updateFiltersUI = () => { const isDiscover = !isActorSearchMode && !isWatchlistMode && !isWatchingMode; const canShowHero = window.innerWidth >= 1024; const showHero = isDiscover && canShowHero; const mediaTypeToggleContainer = movieTypeBtn.parentElement; const mainElement = document.querySelector('main.container'); if(heroBanner) { heroBanner.classList.toggle('hidden', !showHero); header.classList.toggle('header-with-hero', showHero); } if (mainElement) mainElement.style.paddingTop = showHero ? '2rem' : '8rem'; mediaTypeToggleContainer.classList.toggle('hidden', isWatchingMode); const allFilters = [networkFilterWrapper, genreFilterWrapper, yearFilterWrapper, countryFilterWrapper, languageFilterWrapper, resetBtn]; allFilters.forEach(el => el.classList.toggle('hidden', isActorSearchMode)); const showNetworkFilter = (isDiscover || isWatchlistMode) && mediaType === 'tv'; networkFilterWrapper.classList.toggle('hidden', !showNetworkFilter); sortControls.classList.toggle('hidden', !isDiscover); if (isActorSearchMode) { searchInput.placeholder = 'Search for Actors...'; } else if (mediaType === 'tv') { searchInput.placeholder = 'Search for TV Series...'; } else { searchInput.placeholder = 'Search for Films...'; } };
     
-    // CHANGED: Now uses the global `watchedProgress` object
+    // NEW: Calculates watch percentage based on new data structure
+    const calculateWatchPercentage = (seriesDetails, watchedProgressForSeries) => {
+        if (!seriesDetails || !seriesDetails.seasons) return { watched: 0, total: 0, percentage: 0 };
+    
+        const watchedMap = watchedProgressForSeries || {};
+        let totalEpisodes = 0;
+        let watchedCount = 0;
+    
+        const validSeasons = seriesDetails.seasons.filter(s => s.season_number > 0 && s.episode_count > 0);
+    
+        for (const season of validSeasons) {
+            totalEpisodes += season.episode_count;
+            const seasonKey = `s${season.season_number}`;
+            const watchedInSeason = watchedMap[seasonKey] || [];
+            watchedCount += watchedInSeason.length;
+        }
+    
+        if (totalEpisodes === 0) return { watched: 0, total: 0, percentage: 0 };
+        
+        const percentage = Math.round((watchedCount / totalEpisodes) * 100);
+        return { watched: watchedCount, total: totalEpisodes, percentage };
+    };
+
+    // CHANGED: Rewritten to use the new `watched_episodes` map for more accurate "next up" calculation.
     const calculateNextEpisode = (item, progress) => {
-        const itemProgress = progress[item.id];
-        let nextUp = { season: 1, episode: 1 };
-        if (!itemProgress || !item.seasons) return nextUp;
-        const validSeasons = item.seasons.filter(s => s.season_number > 0 && s.episode_count > 0);
-        if (validSeasons.length === 0) return nextUp;
-        const lastWatchedSeason = validSeasons.find(s => s.season_number === itemProgress.season);
-        if (lastWatchedSeason) {
-            if (itemProgress.episode < lastWatchedSeason.episode_count) {
-                nextUp = { season: itemProgress.season, episode: itemProgress.episode + 1 };
-            } else {
-                const nextSeason = validSeasons.find(s => s.season_number === itemProgress.season + 1);
-                if (nextSeason) {
-                    nextUp = { season: nextSeason.season_number, episode: 1 };
-                } else {
-                    nextUp = { season: itemProgress.season, episode: itemProgress.episode }; // Stay on last episode
+        const watchedMap = progress[item.id] || {};
+        const defaultEpisode = { season: 1, episode: 1 };
+    
+        if (!item.seasons || item.seasons.length === 0) {
+            return defaultEpisode;
+        }
+    
+        const validSeasons = item.seasons
+            .filter(s => s.season_number > 0 && s.episode_count > 0)
+            .sort((a, b) => a.season_number - b.season_number);
+    
+        if (validSeasons.length === 0) return defaultEpisode;
+        
+        defaultEpisode.season = validSeasons[0].season_number;
+    
+        for (const season of validSeasons) {
+            const seasonKey = `s${season.season_number}`;
+            const watchedEpisodesInSeason = new Set(watchedMap[seasonKey] || []);
+    
+            for (let ep = 1; ep <= season.episode_count; ep++) {
+                if (!watchedEpisodesInSeason.has(ep)) {
+                    return { season: season.season_number, episode: ep };
                 }
             }
         }
-        return nextUp;
+    
+        // If all episodes are watched, return the last episode of the last season.
+        const lastSeason = validSeasons[validSeasons.length - 1];
+        return { season: lastSeason.season_number, episode: lastSeason.episode_count };
     };
 
     const formatRuntime = (minutes) => { if (!minutes || minutes === 0) return 'N/A'; const hours = Math.floor(minutes / 60); const mins = minutes % 60; return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`; };
-    const generateEpisodeOptions = (episodeCount) => { if (!episodeCount || episodeCount === 0) return '<option>N/A</option>'; return Array.from({ length: episodeCount }, (_, i) => `<option value="${i + 1}">Ep ${i + 1}</option>`).join(''); };
 
-    // CHANGED: Now saves progress to Firestore
-    const openPlayer = async (id, type, controlsContainer, mediaDetails) => {
-        const user = auth.currentUser;
-        const isTV = type === 'tv';
+    // CHANGED: No longer saves progress. Just determines which episode to play and opens it.
+    const openPlayer = async (id, type, mediaDetails) => {
         let src;
-    
-        if (isTV) {
-            const seasonSelect = controlsContainer.querySelector('.player-season-select');
-            const episodeSelect = controlsContainer.querySelector('.player-episode-select');
-            const season = seasonSelect?.value || '1';
-            const episode = episodeSelect?.value || '1';
-            src = `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`;
-    
-            if (user) {
-                const progressRef = db.collection('users').doc(user.uid).collection('progress').doc(String(id));
-                const newProgress = { season: parseInt(season, 10), episode: parseInt(episode, 10) };
-                try {
-                    await progressRef.set(newProgress);
-                    watchedProgress[id] = newProgress; // Update local state
-                } catch (error) {
-                    console.error("Failed to save progress:", error);
-                }
-            }
-    
-            lastPlayedItem = { id, type, season: parseInt(season, 10), episode: parseInt(episode, 10), title: mediaDetails.title || mediaDetails.name };
+        if (type === 'tv') {
+            const nextUp = calculateNextEpisode(mediaDetails, watchedProgress);
+            src = `https://vidsrc.to/embed/tv/${id}/${nextUp.season}/${nextUp.episode}`;
+            lastPlayedItem = { id, type, season: nextUp.season, episode: nextUp.episode, title: mediaDetails.title || mediaDetails.name };
             addToWatchingList(id, type);
         } else {
             src = `https://vidsrc.to/embed/movie/${id}`;
@@ -183,7 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const createPersonCardElement = (person) => { if (!person.profile_path) return null; const title = person.name; const posterUrl = `https://image.tmdb.org/t/p/w500${person.profile_path}`; const escapedName = title.replace(/'/g, "\\'"); const wrapper = document.createElement('div'); wrapper.className = 'media-card-wrapper'; const card = document.createElement('div'); card.className = 'media-card'; card.dataset.id = person.id; card.dataset.type = 'person'; card.dataset.detailsLoaded = 'false'; card.onclick = () => showFilmography(person.id, escapedName); card.innerHTML = `<img src="${posterUrl}" alt="Photo of ${title}" class="media-card-poster" loading="lazy"/><div class="media-card-overlay"><div class="details-pane"><div class="details-spinner"><div class="spinner-small"></div></div><div class="details-content hidden"><div class="details-text-container"><div class="person-name-text"><strong>${title}</strong></div><div class="nationality-text-container hidden"><strong><i class="fa-solid fa-location-dot" aria-hidden="true"></i></strong>⠀<span class="nationality-text"></span></div><div class="age-text-container hidden"><strong><i class="fa-solid fa-cake-candles" aria-hidden="true"></i></strong>⠀<span class="age-text"></span></div></div></div></div></div>`; wrapper.appendChild(card); return wrapper; };
     
-    // CHANGED: Moved status tag container inside the overlay and added "On Air" logic.
+    // CHANGED: Renders new controls for TV series in user lists and attaches modal-opening event.
     const createMediaCardElement = (media) => {
         const type = media.media_type || (media.first_air_date ? 'tv' : 'movie');
         const title = media.title || media.name || 'Unknown Title';
@@ -231,6 +248,44 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
     
         wrapper.appendChild(card);
+
+        // If in watchlist/watching mode and it's a TV show, add the new controls.
+        if ((isWatchlistMode || isWatchingMode) && type === 'tv') {
+            card.style.cursor = 'pointer';
+            card.onclick = () => openEpisodeManager(media.id, media);
+            
+            const playerControls = document.createElement('div');
+            playerControls.className = 'watchlist-player-controls';
+            
+            const progress = calculateWatchPercentage(media, watchedProgress[media.id]);
+            playerControls.innerHTML = `
+                <div class="watchlist-progress-container">
+                    <div class="watchlist-progress-bar-wrapper">
+                        <div class="watchlist-progress-bar" style="width: ${progress.percentage}%"></div>
+                    </div>
+                    <span class="watchlist-progress-label">${progress.watched} / ${progress.total}</span>
+                </div>
+                <div class="watchlist-controls-buttons">
+                    <button class="details-btn player-play-btn" title="Play Next Episode"><i class="fas fa-play"></i></button>
+                </div>
+            `;
+
+            playerControls.querySelector('.player-play-btn').addEventListener('click', e => {
+                e.stopPropagation();
+                openPlayer(media.id, type, media);
+            });
+
+            wrapper.appendChild(playerControls);
+        } else if ((isWatchlistMode || isWatchingMode) && type === 'movie') {
+            const playerControls = document.createElement('div');
+            playerControls.className = 'watchlist-player-controls';
+            playerControls.innerHTML = `<button class="details-btn player-play-btn movie" title="Play Movie"><i class="fas fa-play"></i></button>`;
+            playerControls.querySelector('.player-play-btn').addEventListener('click', e => {
+                e.stopPropagation();
+                openPlayer(media.id, type, media);
+            });
+            wrapper.appendChild(playerControls);
+        }
     
         // Logic to populate details if already available in the media object
         if (media.genres) {
@@ -256,9 +311,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 statusTagContainer.innerHTML = `<span class="status-tag status-${statusClass}">${displayStatus}</span>`;
             }
-            if (type === 'tv') { const network = media.networks?.[0]?.name; if(network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = media.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = media.runtime || (media.episode_run_time ? media.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = media.production_countries?.[0]?.name; if(country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = media.spoken_languages?.[0]?.english_name; if(language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = media.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); } spinner.classList.add('hidden'); content.classList.remove('hidden'); card.dataset.detailsLoaded = 'true'; } else { card.dataset.detailsLoaded = 'false'; } if (isWatchlistMode || isWatchingMode) { const playerControls = document.createElement('div'); playerControls.className = 'watchlist-player-controls'; if (type === 'tv' && media.seasons) { const validSeasons = media.seasons.filter(s => s.season_number > 0 && s.episode_count > 0); if (validSeasons.length > 0) {
-            const nextUp = calculateNextEpisode(media, watchedProgress);
-            const initialSeasonData = validSeasons.find(s => s.season_number === nextUp.season) || validSeasons[0]; playerControls.innerHTML = `<select class="player-season-select">${validSeasons.map(s => `<option value="${s.season_number}" ${s.season_number === nextUp.season ? 'selected' : ''}>S ${s.season_number}</option>`).join('')}</select><select class="player-episode-select">${generateEpisodeOptions(initialSeasonData.episode_count)}</select><button class="details-btn player-play-btn" title="Play Episode"><i class="fas fa-play"></i></button>`; const seasonSelect = playerControls.querySelector('.player-season-select'); const episodeSelect = playerControls.querySelector('.player-episode-select'); if (episodeSelect) episodeSelect.value = nextUp.episode; seasonSelect.addEventListener('change', () => { const selectedSeasonData = validSeasons.find(s => s.season_number == seasonSelect.value); if (selectedSeasonData) { episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count); } }); } } else if (type === 'movie') { playerControls.innerHTML = `<button class="details-btn player-play-btn movie" title="Play Movie"><i class="fas fa-play"></i></button>`; } if (playerControls.hasChildNodes()) { const playBtn = playerControls.querySelector('.player-play-btn'); if (playBtn) { playBtn.addEventListener('click', (e) => { e.stopPropagation(); openPlayer(media.id, type, playerControls, media); }); } wrapper.appendChild(playerControls); } } card.querySelector('.trailer-btn').onclick = (e) => { e.stopPropagation(); showTrailer(media.id, type); }; card.querySelector('.synopsis-btn').onclick = (e) => { e.stopPropagation(); showSynopsis(media.id, type, escapedTitle); }; card.querySelector('.cast-btn').onclick = (e) => { e.stopPropagation(); showCast(media.id, type); }; card.querySelector('.watchlist-btn').onclick = (e) => { e.stopPropagation(); toggleWatchlistAction(media.id, type, e.currentTarget); }; return wrapper; };
+            if (type === 'tv') { const network = media.networks?.[0]?.name; if(network) { card.querySelector('.network-text').textContent = network; card.querySelector('.network-text-container').classList.remove('hidden'); } const seasons = media.number_of_seasons; if (seasons) { card.querySelector('.series-text').textContent = `${seasons} Season${seasons > 1 ? 's' : ''}`; card.querySelector('.series-text-container').classList.remove('hidden'); } } const runtime = media.runtime || (media.episode_run_time ? media.episode_run_time[0] : null); if (runtime) { card.querySelector('.runtime-text').textContent = formatRuntime(runtime); card.querySelector('.runtime-text-container').classList.remove('hidden'); } const country = media.production_countries?.[0]?.name; if(country) { let displayCountry = country; if (country === 'United States of America') displayCountry = 'USA'; if (country === 'United Kingdom') displayCountry = 'UK'; card.querySelector('.country-text').textContent = displayCountry; card.querySelector('.country-text-container').classList.remove('hidden'); } const language = media.spoken_languages?.[0]?.english_name; if(language) { card.querySelector('.language-text').textContent = language; card.querySelector('.language-text-container').classList.remove('hidden'); } const genres = media.genres?.map(g => g.name).join(', '); if (genres) { card.querySelector('.genres-text').textContent = genres; card.querySelector('.genres-text-container').classList.remove('hidden'); } spinner.classList.add('hidden'); content.classList.remove('hidden'); card.dataset.detailsLoaded = 'true'; } else { card.dataset.detailsLoaded = 'false'; } 
+        
+        card.querySelector('.trailer-btn').onclick = (e) => { e.stopPropagation(); showTrailer(media.id, type); }; 
+        card.querySelector('.synopsis-btn').onclick = (e) => { e.stopPropagation(); showSynopsis(media.id, type, escapedTitle); }; 
+        card.querySelector('.cast-btn').onclick = (e) => { e.stopPropagation(); showCast(media.id, type); }; 
+        card.querySelector('.watchlist-btn').onclick = (e) => { e.stopPropagation(); toggleWatchlistAction(media.id, type, e.currentTarget); }; 
+        return wrapper; 
+    };
     const showToast = (message) => { toast.innerHTML = `<span>${message}</span>`; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 3000); };
     const showNextEpisodeToast = (message, buttonText, onAction) => { toast.classList.remove('show'); toast.innerHTML = `<span>${message}</span><div class="toast-buttons-container"><button class="toast-action-btn">${buttonText}</button><button class="toast-close-btn">&times;</button></div>`; const actionBtn = toast.querySelector('.toast-action-btn'); const closeBtn = toast.querySelector('.toast-close-btn'); const closeToast = () => toast.classList.remove('show'); actionBtn.onclick = () => { onAction(); closeToast(); }; closeBtn.onclick = closeToast; toast.classList.add('show'); };
     const _setModalContent = (content, { isTrailer = false, isNavigable = false } = {}) => { const modalId = 'modal-backdrop'; const modal = document.createElement('div'); modal.id = modalId; modal.className = isTrailer ? 'modal-backdrop-trailer' : 'modal-backdrop'; const contentWrapper = document.createElement('div'); contentWrapper.className = isTrailer ? 'modal-content-trailer' : 'modal-content'; const singleClickHandler = (e) => { if (e.target.id === modalId) { isNavigable ? goBackInModal() : closeModal(); } }; const dblClickHandler = (e) => { if (e.target.id === modalId) { closeModal(); } }; modal.onclick = singleClickHandler; modal.ondblclick = dblClickHandler; const closeBtn = document.createElement('button'); closeBtn.className = isTrailer ? 'modal-close-btn-trailer' : 'modal-close-btn'; closeBtn.innerHTML = '<i class="fas fa-times fa-lg"></i>'; closeBtn.setAttribute('aria-label', 'Close modal'); closeBtn.onclick = closeModal; if (typeof content === 'string') { contentWrapper.innerHTML += content; } else { contentWrapper.appendChild(content); } contentWrapper.prepend(closeBtn); modal.appendChild(contentWrapper); modalContainer.innerHTML = ''; modalContainer.appendChild(modal); const filmographyContent = contentWrapper.querySelector('[data-filmography-person-id]'); if (filmographyContent) { const personId = filmographyContent.dataset.filmographyPersonId; const scrollKey = `filmography-scroll-${personId}`; const savedScrollTop = sessionStorage.getItem(scrollKey); if (savedScrollTop) { setTimeout(() => { contentWrapper.scrollTop = parseInt(savedScrollTop, 10); }, 0); } contentWrapper.addEventListener('scroll', () => { sessionStorage.setItem(scrollKey, contentWrapper.scrollTop); }); } document.documentElement.classList.add('is-modal-open'); };
@@ -486,7 +546,6 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const watchlistPromise = db.collection('users').doc(user.uid).collection('watchlist').get();
             const watchingPromise = db.collection('users').doc(user.uid).collection('watching').get();
-            // NEW: Fetch progress data
             const progressPromise = db.collection('users').doc(user.uid).collection('progress').get();
 
             const [watchlistSnapshot, watchingSnapshot, progressSnapshot] = await Promise.all([watchlistPromise, watchingPromise, progressPromise]);
@@ -505,10 +564,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             watchingItems = watchingSnapshot.docs.map(doc => doc.data());
 
-            // NEW: Populate local progress object
+            // NEW: Populate local progress object with the watched_episodes map
             watchedProgress = {};
             progressSnapshot.forEach(doc => {
-                watchedProgress[doc.id] = doc.data();
+                watchedProgress[doc.id] = doc.data().watched_episodes || {};
             });
 
             updateAllCardWatchlistIcons();
@@ -898,7 +957,163 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-    // CHANGED: Now saves progress to Firestore instead of localStorage
+    // NEW: Toggles an episode's watched status and saves to Firestore.
+    const toggleEpisodeWatchedStatus = async (seriesId, seriesDetails, seasonNumber, episodeNumber, isWatched) => {
+        const user = auth.currentUser;
+        if (!user) return;
+    
+        if (!watchedProgress[seriesId]) {
+            watchedProgress[seriesId] = {};
+        }
+    
+        const seasonKey = `s${seasonNumber}`;
+        if (!watchedProgress[seriesId][seasonKey]) {
+            watchedProgress[seriesId][seasonKey] = [];
+        }
+    
+        const watchedEpisodesInSeason = new Set(watchedProgress[seriesId][seasonKey]);
+    
+        if (isWatched) {
+            watchedEpisodesInSeason.add(episodeNumber);
+        } else {
+            watchedEpisodesInSeason.delete(episodeNumber);
+        }
+    
+        watchedProgress[seriesId][seasonKey] = Array.from(watchedEpisodesInSeason).sort((a, b) => a - b);
+    
+        // Update UI
+        const modal = document.getElementById('episode-manager-modal');
+        if (modal) {
+            const progress = calculateWatchPercentage(seriesDetails, watchedProgress[seriesId]);
+            const headerProgressBar = modal.querySelector('.episode-modal-progress-bar');
+            const headerProgressLabel = modal.querySelector('.episode-modal-progress-label');
+            if (headerProgressBar) headerProgressBar.style.width = `${progress.percentage}%`;
+            if (headerProgressLabel) headerProgressLabel.textContent = `${progress.watched} / ${progress.total} Watched`;
+        }
+        
+        const cardWrapper = document.querySelector(`.media-card[data-id="${seriesId}"]`)?.closest('.media-card-wrapper');
+        if (cardWrapper) {
+            const progress = calculateWatchPercentage(seriesDetails, watchedProgress[seriesId]);
+            const cardProgressBar = cardWrapper.querySelector('.watchlist-progress-bar');
+            const cardProgressLabel = cardWrapper.querySelector('.watchlist-progress-label');
+            if (cardProgressBar) cardProgressBar.style.width = `${progress.percentage}%`;
+            if (cardProgressLabel) cardProgressLabel.textContent = `${progress.watched} / ${progress.total}`;
+        }
+        
+        // Save to Firestore
+        try {
+            const progressRef = db.collection('users').doc(user.uid).collection('progress').doc(String(seriesId));
+            await progressRef.set({ watched_episodes: watchedProgress[seriesId] });
+        } catch (error) {
+            console.error("Failed to save progress:", error);
+            showToast("Error saving progress.");
+        }
+    };
+    
+    // NEW/CHANGED: Opens the episode management modal with tabs and more info.
+    const openEpisodeManager = async (seriesId, seriesDetails) => {
+        _setModalContent(createSpinnerHTML(), {});
+        const modalContent = document.querySelector('.modal-content');
+        if(modalContent) modalContent.id = 'episode-manager-modal';
+
+        try {
+            // Fetch details for all seasons
+            const seasonPromises = seriesDetails.seasons
+                .filter(s => s.season_number > 0)
+                .map(s => fetchFromApi(`tv/${seriesId}/season/${s.season_number}?language=en-US`));
+            const seasonsData = await Promise.all(seasonPromises);
+    
+            const progress = calculateWatchPercentage(seriesDetails, watchedProgress[seriesId]);
+    
+            let modalHTML = `
+                <button class="modal-close-btn" onclick="closeModal()"><i class="fas fa-times fa-lg"></i></button>
+                <div class="episode-modal-header">
+                    <h2 class="modal-title">${seriesDetails.name}</h2>
+                    <div class="episode-modal-progress-container">
+                        <div class="watchlist-progress-bar-wrapper">
+                            <div class="episode-modal-progress-bar" style="width: ${progress.percentage}%"></div>
+                        </div>
+                        <span class="episode-modal-progress-label">${progress.watched} / ${progress.total} Watched</span>
+                    </div>
+                </div>
+                <div class="episode-modal-controls">
+                    <div id="season-tabs" class="season-tabs">
+                        ${seasonsData.map(s => `<button class="season-tab-btn" data-season-number="${s.season_number}">Season ${s.season_number}</button>`).join('')}
+                    </div>
+                </div>
+                <div id="episode-grid-container"></div>
+            `;
+            modalContent.innerHTML = modalHTML;
+    
+            const renderEpisodeGrid = (seasonNumber) => {
+                const season = seasonsData.find(s => s.season_number == seasonNumber);
+                if (!season) return;
+    
+                const seasonKey = `s${season.season_number}`;
+                const watchedSet = new Set(watchedProgress[seriesId]?.[seasonKey] || []);
+    
+                const gridContainer = document.getElementById('episode-grid-container');
+                gridContainer.innerHTML = `<div class="episode-grid">${
+                    (season.episodes || []).map(ep => {
+                        const isEpWatched = watchedSet.has(ep.episode_number);
+                        const stillUrl = ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : UNAVAILABLE_IMAGE_URL;
+                        return `
+                            <div class="episode-item ${isEpWatched ? 'watched' : ''}" data-episode-number="${ep.episode_number}">
+                                <div class="episode-thumbnail-wrapper">
+                                    <img src="${stillUrl}" alt="${ep.name}" class="episode-thumbnail" loading="lazy"/>
+                                    <div class="episode-watched-overlay">
+                                        <i class="fas fa-check-circle"></i>
+                                    </div>
+                                </div>
+                                <div class="episode-info">
+                                    <p class="episode-title"><strong>${ep.episode_number}.</strong> ${ep.name}</p>
+                                    <p class="episode-air-date"><i class="fa-regular fa-calendar"></i> ${formatAirDate(ep.air_date)}</p>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')
+                }</div>`;
+
+                gridContainer.querySelectorAll('.episode-item').forEach(item => {
+                    item.addEventListener('click', () => {
+                        const episodeNumber = parseInt(item.dataset.episodeNumber, 10);
+                        const isCurrentlyWatched = item.classList.contains('watched');
+                        item.classList.toggle('watched');
+                        toggleEpisodeWatchedStatus(seriesId, seriesDetails, seasonNumber, episodeNumber, !isCurrentlyWatched);
+                    });
+                });
+            };
+    
+            const seasonTabsContainer = document.getElementById('season-tabs');
+            const firstTab = seasonTabsContainer.querySelector('.season-tab-btn');
+
+            const handleTabClick = (target) => {
+                 if (target && target.classList.contains('season-tab-btn')) {
+                    seasonTabsContainer.querySelector('.active')?.classList.remove('active');
+                    target.classList.add('active');
+                    const seasonNumber = target.dataset.seasonNumber;
+                    renderEpisodeGrid(seasonNumber);
+                }
+            }
+
+            seasonTabsContainer.addEventListener('click', (e) => handleTabClick(e.target));
+    
+            // Initial render
+            if (firstTab) {
+                handleTabClick(firstTab);
+            }
+
+        } catch (error) {
+            console.error("Failed to load episode data:", error);
+            modalContent.innerHTML = `
+                <button class="modal-close-btn" onclick="closeModal()"><i class="fas fa-times fa-lg"></i></button>
+                <h2 class="modal-title">${seriesDetails.name}</h2>
+                <p class="modal-body-text" style="text-align: center;">Could not load episode details.</p>
+            `;
+        }
+    };
+
+    // CHANGED: Works with new `watched_episodes` map for "Watch Next?" feature
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && lastPlayedItem && lastPlayedItem.type === 'tv') {
             const itemToProcess = { ...lastPlayedItem };
@@ -906,47 +1121,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const seriesData = watchingItems.find(item => item.id === itemToProcess.id);
             if (!seriesData || !seriesData.seasons) { return; }
     
-            let nextUp = null;
-            const currentSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season);
-            if (currentSeasonData && itemToProcess.episode < currentSeasonData.episode_count) {
-                nextUp = { season: itemToProcess.season, episode: itemToProcess.episode + 1 };
-            } else {
-                const nextSeasonData = seriesData.seasons.find(s => s.season_number === itemToProcess.season + 1);
-                if (nextSeasonData && nextSeasonData.episode_count > 0) {
-                    nextUp = { season: nextSeasonData.season_number, episode: 1 };
-                }
-            }
+            const nextUp = calculateNextEpisode(seriesData, watchedProgress);
     
-            if (nextUp) {
+            if (nextUp && (nextUp.season !== itemToProcess.season || nextUp.episode !== itemToProcess.episode)) {
                 const message = `Finished S${itemToProcess.season}:E${itemToProcess.episode} of ${itemToProcess.title}?`;
                 const buttonText = `Watch Next`;
                 const onAction = async () => {
-                    const user = auth.currentUser;
-                    const src = `https://vidsrc.to/embed/tv/${itemToProcess.id}/${nextUp.season}/${nextUp.episode}`;
+                    // Mark the episode just watched as complete
+                    await toggleEpisodeWatchedStatus(itemToProcess.id, seriesData, itemToProcess.season, itemToProcess.episode, true);
                     
-                    if (user) {
-                        const progressRef = db.collection('users').doc(user.uid).collection('progress').doc(String(itemToProcess.id));
-                        const newProgress = { season: nextUp.season, episode: nextUp.episode };
-                        try {
-                            await progressRef.set(newProgress);
-                            watchedProgress[itemToProcess.id] = newProgress;
-                        } catch (error) { console.error("Failed to save next episode progress:", error); }
-                    }
-    
-                    lastPlayedItem = { ...itemToProcess, season: nextUp.season, episode: nextUp.episode };
+                    // Now find the *new* next episode and play it
+                    const newNextUp = calculateNextEpisode(seriesData, watchedProgress);
+                    const src = `https://vidsrc.to/embed/tv/${itemToProcess.id}/${newNextUp.season}/${newNextUp.episode}`;
+                    lastPlayedItem = { ...itemToProcess, season: newNextUp.season, episode: newNextUp.episode };
                     window.open(src, '_blank');
-                    
-                    const cardWrapper = document.querySelector(`.media-card[data-id="${seriesData.id}"]`)?.closest('.media-card-wrapper');
-                    if (cardWrapper) {
-                        const seasonSelect = cardWrapper.querySelector('.player-season-select');
-                        const episodeSelect = cardWrapper.querySelector('.player-episode-select');
-                        if(seasonSelect) seasonSelect.value = nextUp.season;
-                        const selectedSeasonData = seriesData.seasons.find(s => s.season_number == nextUp.season);
-                        if (selectedSeasonData && episodeSelect) {
-                            episodeSelect.innerHTML = generateEpisodeOptions(selectedSeasonData.episode_count);
-                            episodeSelect.value = nextUp.episode;
-                        }
-                    }
                 };
                 showNextEpisodeToast(message, buttonText, onAction);
             }
