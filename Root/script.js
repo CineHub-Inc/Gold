@@ -338,6 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let src;
         if (type === 'tv') {
             const nextUp = calculateNextEpisode(mediaDetails, watchedProgress);
+            await toggleEpisodeWatchedStatus(id, mediaDetails, nextUp.season, nextUp.episode, true);
             src = `https://vidsrc.to/embed/tv/${id}/${nextUp.season}/${nextUp.episode}`;
             lastPlayedItem = { id, type, season: nextUp.season, episode: nextUp.episode, title: mediaDetails.title || mediaDetails.name };
             addToWatchingList(id, type);
