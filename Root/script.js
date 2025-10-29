@@ -1,5 +1,3 @@
-
-
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE ---
     const API_V3_KEY = '329f898e5642c90715fd2b4a81f0e2d6';
