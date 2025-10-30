@@ -25,8 +25,16 @@
                 <div class="header-right">
                     <button id="watching-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-eye"></i>⠀Watching</button>
                     <button id="watchlist-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-bookmark"></i>⠀Watchlist</button>
-                    <button id="login-btn" class="media-type-btn watchlist-btn-lx"><i class="fa-solid fa-user"></i> Login</button>
-                    <button id="logout-btn" class="media-type-btn watchlist-btn-lx hidden"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+
+                    <div id="profile-menu-container" class="profile-menu-container">
+                        <button id="profile-menu-btn" class="media-type-btn watchlist-btn-lx">
+                            <i class="fa-solid fa-solid fa-user"></i> Login
+                        </button>
+                        <div id="profile-menu-dropdown" class="profile-menu-dropdown hidden">
+                            <!-- Dropdown content is dynamically populated by JS -->
+                        </div>
+                    </div>
+
                     <div class="search-controls">
                         <div class="search-container">
                             <i class="fas fa-search search-icon"></i>
@@ -40,6 +48,7 @@
                             <div id="search-results-dropdown" class="search-results-dropdown hidden"></div>
                         </div>
                     </div>
+                    
                 </div>
             </div>
         </div>
@@ -109,8 +118,71 @@
             </div>
         </div>
     </div>
-    <!-- END: Login Modal (Signup Modal Removed) -->
+    <!-- END: Login Modal -->
+
+    <!-- START: Account Settings Modal (Refactored) -->
+    <div id="account-settings-modal-backdrop" class="modal-backdrop hidden">
+        <div id="account-settings-modal" class="modal-content">
+            <button class="modal-close-btn" id="account-settings-modal-close">&times;</button>
+            <h2 class="modal-title">Account Settings</h2>
+            <div class="account-settings-content">
+                <div id="profile-tab-content" class="account-tab-content active">
+                    <h3>Profile Information</h3>
+                    <p><strong>Email:</strong> <span id="account-email-display">Not logged in</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- END: Account Settings Modal -->
     
+    <!-- START: Hidden Content Modal -->
+    <div id="hidden-content-modal-backdrop" class="modal-backdrop hidden">
+        <div id="hidden-content-modal" class="modal-content">
+            <button class="modal-close-btn" id="hidden-content-modal-close">&times;</button>
+            <h2 class="modal-title">Hidden Content</h2>
+            <div class="hidden-content-controls">
+                <div class="hidden-content-tabs" id="hidden-content-tabs">
+                    <button class="hidden-tab-btn active" data-filter="all">All</button>
+                    <button class="hidden-tab-btn" data-filter="movie">Films</button>
+                    <button class="hidden-tab-btn" data-filter="tv">TV Series</button>
+                </div>
+                <div class="hidden-content-search-wrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" id="hidden-content-search-input" placeholder="Search hidden items..." />
+                </div>
+            </div>
+            <p class="modal-body-text">Items you mark as "Not Interested" will appear here. You can restore them at any time.</p>
+            <div id="hidden-items-grid-modal" class="media-grid">
+                <!-- Hidden items will be populated here by JS -->
+            </div>
+        </div>
+    </div>
+    <!-- END: Hidden Content Modal -->
+
+    <!-- START: Watched History Modal (NEW) -->
+    <div id="watched-history-modal-backdrop" class="modal-backdrop hidden">
+        <div id="watched-history-modal" class="modal-content">
+            <button class="modal-close-btn" id="watched-history-modal-close">&times;</button>
+            <h2 class="modal-title">Watched History</h2>
+            <div class="hidden-content-controls">
+                <div class="hidden-content-tabs" id="watched-history-tabs">
+                    <button class="hidden-tab-btn active" data-filter="all">All</button>
+                    <button class="hidden-tab-btn" data-filter="movie">Films</button>
+                    <button class="hidden-tab-btn" data-filter="tv">TV Series</button>
+                </div>
+                <div class="hidden-content-search-wrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" id="watched-history-search-input" placeholder="Search watched items..." />
+                </div>
+            </div>
+            <p class="modal-body-text">Items you've marked as "Watched" will appear here. You can mark them as unwatched to see them in discovery again.</p>
+            <div id="watched-items-grid-modal" class="media-grid">
+                <!-- Watched items will be populated here by JS -->
+            </div>
+        </div>
+    </div>
+    <!-- END: Watched History Modal -->
+
     <button id="back-to-top-btn" class="back-to-top-btn hidden" title="Go to top">
         <i class="fa-solid fa-angle-up"></i>
     </button>
