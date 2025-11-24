@@ -1,1 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>We Moved</title>
+    <!-- Tailwind CSS for rapid, modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Dark Slate background */
+        }
+        
+        /* Smooth fade-in animation */
+        .fade-in-up {
+            animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(20px);
+        }
 
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Custom link underline effect */
+        .link-hover {
+            position: relative;
+            text-decoration: none;
+            color: #22d3ee; /* Cyan-400 matching the vibe */
+            font-weight: 600;
+            transition: color 0.3s ease;
+        }
+
+        .link-hover::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            transform: scaleX(0);
+            height: 2px;
+            bottom: -2px;
+            left: 0;
+            background-color: #22d3ee;
+            transform-origin: bottom right;
+            transition: transform 0.25s ease-out;
+        }
+
+        .link-hover:hover::after {
+            transform: scaleX(1);
+            transform-origin: bottom left;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <!-- Main Container -->
+    <div class="fade-in-up max-w-md w-full bg-slate-800/50 backdrop-blur-lg border border-slate-700 rounded-2xl shadow-2xl overflow-hidden p-8 text-center relative">
+        
+        <!-- Background decorative blob for style -->
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-cyan-500/20 rounded-full blur-3xl -z-10 pointer-events-none"></div>
+
+        <!-- Logo Container -->
+        <div class="mb-8 flex justify-center">
+            <!-- Constrained width to ensure it looks neat, but responsive -->
+            <img src="logo.png" alt="CineHub Logo" class="h-auto w-auto max-h-24 max-w-[80%] object-contain drop-shadow-lg">
+        </div>
+
+        <!-- Headline -->
+        <h1 class="text-4xl font-bold text-white mb-2 tracking-tight">We moved.</h1>
+        
+        <!-- Message -->
+        <p class="text-slate-300 text-lg mb-8 leading-relaxed">
+            Our home has changed. <br>
+            You can now find us <a href="https://cinehubx.netlify.app/#home" class="link-hover">Here</a>.
+        </p>
+
+        <!-- Secondary CTA Button (Better UX) -->
+        <a href="https://cinehubx.netlify.app/#home" 
+           class="inline-flex items-center justify-center px-6 py-3 text-sm font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded-full transition-all duration-300 transform hover:scale-105 shadow-[0_0_20px_rgba(34,211,238,0.3)]">
+            Go to New Site
+            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path>
+            </svg>
+        </a>
+
+        <!-- Footer Note -->
+        <p class="mt-8 text-xs text-slate-500">
+            Please update your bookmarks.
+        </p>
+    </div>
+
+</body>
+</html>
